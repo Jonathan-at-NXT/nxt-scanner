@@ -141,6 +141,39 @@ def create_projects_database(hdd_db_id: str) -> str:
     return db_id
 
 
+def _find_existing_databases() -> tuple[str | None, str | None]:
+    """Sucht bestehende Datenbanken unter der Parent Page."""
+    parent_id = _get_parent_page_id()
+    if not parent_id:
+        return None, None
+
+    hdd_db_id = None
+    projects_db_id = None
+
+    try:
+        body = {"filter": {"property": "object", "value": "database"}}
+        resp = api_post(f"search", body)
+        for result in resp.get("results", []):
+            if result.get("object") != "database":
+                continue
+            # Parent Page prüfen
+            parent = result.get("parent", {})
+            result_parent_id = parent.get("page_id", "").replace("-", "")
+            if result_parent_id != parent_id.replace("-", ""):
+                continue
+            # Name prüfen
+            title_parts = result.get("title", [])
+            title = title_parts[0]["plain_text"] if title_parts else ""
+            if title == "Datenträger":
+                hdd_db_id = result["id"]
+            elif title == "Projekte":
+                projects_db_id = result["id"]
+    except Exception:
+        pass
+
+    return hdd_db_id, projects_db_id
+
+
 def ensure_databases() -> tuple[str, str]:
     config = load_config()
     hdd_db_id = config.get("hdd_db_id")
@@ -158,6 +191,14 @@ def ensure_databases() -> tuple[str, str]:
             api_get(f"databases/{projects_db_id}")
         except httpx.HTTPStatusError:
             projects_db_id = None
+
+    # Bestehende Datenbanken suchen bevor neue erstellt werden
+    if not hdd_db_id or not projects_db_id:
+        found_hdd, found_projects = _find_existing_databases()
+        if not hdd_db_id and found_hdd:
+            hdd_db_id = found_hdd
+        if not projects_db_id and found_projects:
+            projects_db_id = found_projects
 
     if not hdd_db_id:
         print("Erstelle Notion-Datenbanken...")
