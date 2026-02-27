@@ -9,7 +9,7 @@ from . import __version__
 
 logger = logging.getLogger(__name__)
 
-VERSION_URL = "https://raw.githubusercontent.com/nxt-studios/nxt-scanner/main/version.json"
+VERSION_URL = "https://raw.githubusercontent.com/Jonathan-at-NXT/nxt-scanner/main/version.json"
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
