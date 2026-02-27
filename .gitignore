@@ -1,0 +1,23 @@
+# Build
+build/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Reports (user data)
+*_report.json
+
+# IDE
+.idea/
+.vscode/
+*.swp

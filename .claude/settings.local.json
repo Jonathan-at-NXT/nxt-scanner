@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x:*)",
+      "Bash(python3:*)",
+      "Bash(tail:*)",
+      "Bash(codesign:*)",
+      "Bash(create-dmg:*)",
+      "Bash(open:*)",
+      "Bash(head:*)",
+      "Bash(sleep 5:*)"
+    ]
+  }
+}
