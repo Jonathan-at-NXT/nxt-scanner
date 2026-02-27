@@ -402,9 +402,34 @@ def ask_for_setup() -> None:
         save_config(config)
 
 
+def register_login_item() -> None:
+    """Registriert die App als Login-Item (startet automatisch bei Anmeldung)."""
+    try:
+        import subprocess
+        app_path = "/Applications/NXT Scanner.app"
+        # Prüfen ob bereits als Login-Item registriert
+        result = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to get the name of every login item'],
+            capture_output=True, text=True,
+        )
+        if "NXT Scanner" in result.stdout:
+            return
+
+        subprocess.run(
+            ["osascript", "-e",
+             f'tell application "System Events" to make login item at end '
+             f'with properties {{path:"{app_path}", hidden:false}}'],
+            capture_output=True, text=True,
+        )
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
     migrate_legacy_data()
     ensure_dirs()
     ask_for_setup()
+    register_login_item()
     StorageScannerApp().run()

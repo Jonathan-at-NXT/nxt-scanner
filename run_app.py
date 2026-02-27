@@ -2,7 +2,8 @@
 
 from storage_scanner.menubar import (
     NSApplication, NSApplicationActivationPolicyAccessory,
-    migrate_legacy_data, ensure_dirs, ask_for_setup, StorageScannerApp,
+    migrate_legacy_data, ensure_dirs, ask_for_setup, register_login_item,
+    StorageScannerApp,
 )
 
 if __name__ == "__main__":
@@ -10,4 +11,5 @@ if __name__ == "__main__":
     migrate_legacy_data()
     ensure_dirs()
     ask_for_setup()
+    register_login_item()
     StorageScannerApp().run()
