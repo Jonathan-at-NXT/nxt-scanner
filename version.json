@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.2.2",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Notion-URL wird automatisch erkannt, Volumes ausblenden."
+  "release_notes": "App-Icon & Menubar-Logo, Letzter Scan mit Uhrzeit, SI-Einheiten (Finder-kompatibel)."
 }

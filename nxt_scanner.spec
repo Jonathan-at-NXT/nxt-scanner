@@ -12,7 +12,10 @@ a = Analysis(
     [os.path.join(spec_dir, 'run_app.py')],
     pathex=[spec_dir],
     binaries=[],
-    datas=[],
+    datas=[
+        (os.path.join(spec_dir, 'resources', 'menubar_iconTemplate.png'), 'resources'),
+        (os.path.join(spec_dir, 'resources', 'menubar_iconTemplate@2x.png'), 'resources'),
+    ],
     hiddenimports=[
         # App-Module
         'storage_scanner',
@@ -84,7 +87,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='NXT Scanner.app',
-    icon=None,  # TODO: Icon hinzufügen wenn vorhanden: 'resources/NXT Scanner.icns'
+    icon=os.path.join(spec_dir, 'resources', 'AppIcon.icns'),
     bundle_identifier='com.nxtstudios.nxt-scanner',
     version=__version__,
     info_plist={

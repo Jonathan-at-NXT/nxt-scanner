@@ -315,7 +315,7 @@ def sync_hdd(hdd_db_id: str, report: dict, disk_info: dict, user_name: str = "")
         "Belegt (GB)": {"number": bytes_to_gb(disk_info["used_bytes"])},
         "Gültige Projekte": {"number": scan_info["valid_folders"]},
         "Unassigned": {"number": scan_info["unassigned_folders"]},
-        "Letzter Scan": {"date": {"start": scan_info["scan_date"][:10]}},
+        "Letzter Scan": {"date": {"start": scan_info["scan_date"]}},
         "Volume UUID": {"rich_text": [{"text": {"content": scan_info.get("volume_uuid", "")}}]},
         "Zuletzt genutzt von": {"rich_text": [{"text": {"content": user_name}}]},
     }

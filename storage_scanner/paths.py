@@ -17,6 +17,15 @@ def is_frozen() -> bool:
     return getattr(sys, "frozen", False)
 
 
+def get_resource_path(filename: str) -> Path:
+    """Gibt den Pfad zu einer gebündelten Resource-Datei zurück."""
+    if is_frozen():
+        # PyInstaller: Resources liegen neben der Executable
+        return Path(sys._MEIPASS) / "resources" / filename
+    # Entwicklung: resources/ im Projekt-Root
+    return Path(__file__).resolve().parent.parent / "resources" / filename
+
+
 def get_data_dir() -> Path:
     """Beschreibbares Verzeichnis für Config, Logs, Reports."""
     data_dir = Path.home() / "Library" / "Application Support" / APP_NAME

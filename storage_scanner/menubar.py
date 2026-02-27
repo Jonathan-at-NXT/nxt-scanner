@@ -19,7 +19,7 @@ from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
 from . import __version__
 from .paths import (
     CONFIG_PATH, LOG_PATH, LAST_SCAN_PATH, REPORTS_DIR,
-    ensure_dirs, migrate_legacy_data,
+    ensure_dirs, migrate_legacy_data, get_resource_path,
 )
 from .updater import check_for_update
 
@@ -55,7 +55,8 @@ def save_config(config: dict) -> None:
 
 class StorageScannerApp(rumps.App):
     def __init__(self):
-        super().__init__("NXT", quit_button=None)
+        icon_path = get_resource_path("menubar_iconTemplate.png")
+        super().__init__("", icon=str(icon_path), template=True, quit_button=None)
 
         self._queue = queue.Queue()
         self._current_scan = None
@@ -215,10 +216,10 @@ class StorageScannerApp(rumps.App):
                 self.status_item.title = f"  Scanne {current}  (+{remaining} in Warteschlange)"
             else:
                 self.status_item.title = f"  Scanne {current}..."
-            self.title = "NXT ⟳"
+            self.title = " ⟳"
         else:
             self.status_item.title = f"  {len(volumes)} Datenträger verbunden"
-            self.title = "NXT"
+            self.title = ""
 
         # Warteschlange
         for key in list(self.queue_item):
@@ -407,13 +408,13 @@ def ask_for_setup() -> None:
             message="Notion Integration Token eingeben.\n"
                     "(Notion Settings → Connections → Develop or manage integrations)",
             title="NXT Storage Scanner – Setup (2/3)",
-            default_text="ntn_...",
+            default_text="",
             ok="Weiter",
             cancel=False,
             dimensions=(400, 24),
         ).run()
         token = response.text.strip()
-        if token and token != "ntn_...":
+        if token:
             config["notion_token"] = token
             changed = True
 
