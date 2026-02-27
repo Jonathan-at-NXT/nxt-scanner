@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
   "release_notes": "Notion-URL wird automatisch erkannt, Volumes ausblenden."
 }

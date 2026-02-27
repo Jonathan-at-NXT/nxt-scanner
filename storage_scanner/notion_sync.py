@@ -30,9 +30,12 @@ def _get_headers() -> dict:
 
 
 def _get_parent_page_id() -> str:
-    """Liest die Parent Page ID aus der Config."""
+    """Liest die Parent Page ID aus der Config. Extrahiert ID aus URL falls nötig."""
+    import re
     config = load_config()
-    return config.get("notion_parent_page_id", "")
+    raw = config.get("notion_parent_page_id", "")
+    match = re.search(r"([a-f0-9]{32})", raw)
+    return match.group(1) if match else raw
 
 
 # ── API-Hilfsfunktionen ────────────────────────────────────────────
