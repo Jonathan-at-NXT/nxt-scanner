@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Erster Release als macOS App."
+  "release_notes": "Notion-URL wird automatisch erkannt, Volumes ausblenden."
 }

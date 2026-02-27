@@ -61,7 +61,9 @@ class StorageScannerApp(rumps.App):
         self._current_scan = None
         self._known_volumes: set[str] = set()
         self._scan_times = self._load_scan_times()
-        self._user_name = load_config().get("user_name", "")
+        config = load_config()
+        self._user_name = config.get("user_name", "")
+        self._hidden_volumes: set[str] = set(config.get("hidden_volumes", []))
         self._worker = threading.Thread(target=self._process_queue, daemon=True)
         self._worker.start()
 
@@ -234,14 +236,31 @@ class StorageScannerApp(rumps.App):
         # Volumes
         for key in list(self.volumes_menu):
             del self.volumes_menu[key]
-        if volumes:
-            for vol in volumes:
-                self.volumes_menu.add(rumps.MenuItem(
-                    f"Scannen: {vol}",
+        visible = [v for v in volumes if v not in self._hidden_volumes]
+        hidden = [v for v in volumes if v in self._hidden_volumes]
+        if visible:
+            for vol in visible:
+                vol_submenu = rumps.MenuItem(vol)
+                vol_submenu.add(rumps.MenuItem(
+                    "Scannen",
                     callback=lambda sender, v=vol: self.enqueue(v),
                 ))
+                vol_submenu.add(rumps.MenuItem(
+                    "Ausblenden",
+                    callback=lambda sender, v=vol: self._hide_volume(v),
+                ))
+                self.volumes_menu.add(vol_submenu)
         else:
-            self.volumes_menu.add(rumps.MenuItem("Keine externen Volumes"))
+            self.volumes_menu.add(rumps.MenuItem("Keine sichtbaren Volumes"))
+        if hidden:
+            self.volumes_menu.add(None)
+            hidden_submenu = rumps.MenuItem("Ausgeblendet")
+            for vol in hidden:
+                hidden_submenu.add(rumps.MenuItem(
+                    f"Einblenden: {vol}",
+                    callback=lambda sender, v=vol: self._unhide_volume(v),
+                ))
+            self.volumes_menu.add(hidden_submenu)
 
         # Letzter Scan
         self.last_scan_item.title = f"Letzter Sync: {self.get_last_scan_info()}"
@@ -304,10 +323,27 @@ class StorageScannerApp(rumps.App):
         self._log(f"FEHLER bei {volume_name}: {error.strip()[:200]}")
         rumps.notification("NXT Storage Scanner", "Fehler", f"{volume_name}: {error[:100]}")
 
+    # ── Volumes ausblenden ─────────────────────────────────────────
+
+    def _hide_volume(self, volume_name: str):
+        self._hidden_volumes.add(volume_name)
+        self._save_hidden_volumes()
+        rumps.notification("NXT Storage Scanner", "Ausgeblendet", f"{volume_name} wird nicht mehr gescannt.")
+
+    def _unhide_volume(self, volume_name: str):
+        self._hidden_volumes.discard(volume_name)
+        self._save_hidden_volumes()
+        rumps.notification("NXT Storage Scanner", "Eingeblendet", f"{volume_name} wird wieder gescannt.")
+
+    def _save_hidden_volumes(self):
+        config = load_config()
+        config["hidden_volumes"] = sorted(self._hidden_volumes)
+        save_config(config)
+
     # ── Aktionen ────────────────────────────────────────────────────
 
     def scan_all(self, _):
-        volumes = self.get_mounted_volumes()
+        volumes = [v for v in self.get_mounted_volumes() if v not in self._hidden_volumes]
         if not volumes:
             rumps.notification("NXT Storage Scanner", "", "Kein externer Datenträger gefunden.")
             return
@@ -384,17 +420,20 @@ def ask_for_setup() -> None:
     # Parent Page ID
     if not config.get("notion_parent_page_id"):
         response = rumps.Window(
-            message="Notion Parent Page ID eingeben.\n"
+            message="Notion Page URL oder ID eingeben.\n"
                     "(Die Seite unter der die Datenbanken erstellt werden.\n"
-                    "URL: notion.so/XXXXXXXX → die ID ist der letzte Teil.)",
+                    "Ganze URL oder nur die ID – beides funktioniert.)",
             title="NXT Storage Scanner – Setup (3/3)",
             default_text="",
             ok="Fertig",
             cancel=False,
             dimensions=(400, 24),
         ).run()
-        page_id = response.text.strip()
-        if page_id:
+        raw = response.text.strip()
+        if raw:
+            # ID aus URL extrahieren: letzter 32-Zeichen-Hex-Block
+            match = re.search(r"([a-f0-9]{32})(?:[?#]|$)", raw)
+            page_id = match.group(1) if match else raw
             config["notion_parent_page_id"] = page_id
             changed = True
 
