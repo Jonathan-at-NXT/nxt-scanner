@@ -86,7 +86,7 @@ def create_hdd_database() -> str:
             "Unassigned": {"number": {"format": "number"}},
             "Letzter Scan": {"date": {}},
             "Volume UUID": {"rich_text": {}},
-            "Zuletzt genutzt von": {"rich_text": {}},
+            "Zuletzt genutzt von": {"select": {}},
         },
     })
     print(f"  Datenträger-Datenbank erstellt: {db['id']}")
@@ -126,6 +126,7 @@ def create_projects_database(hdd_db_id: str) -> str:
             },
             "Absoluter Pfad": {"rich_text": {}},
             "Letzte Änderung": {"date": {}},
+            "Letzter Scan": {"date": {}},
         },
     })
     db_id = db["id"]
@@ -224,7 +225,7 @@ def migrate_schema(hdd_db_id: str, projects_db_id: str) -> None:
                 "Kapazität (GB)": {"number": {"format": "number"}},
                 "Belegt (GB)": {"number": {"format": "number"}},
                 "Volume UUID": {"rich_text": {}},
-                "Zuletzt genutzt von": {"rich_text": {}},
+                "Zuletzt genutzt von": {"select": {}},
             }
         })
     except httpx.HTTPStatusError:
@@ -236,6 +237,7 @@ def migrate_schema(hdd_db_id: str, projects_db_id: str) -> None:
                 "Größe (GB)": {"number": {"format": "number"}},
                 "Absoluter Pfad": {"rich_text": {}},
                 "Letzte Änderung": {"date": {}},
+                "Letzter Scan": {"date": {}},
                 "Projekt": {"relation": {"database_id": projects_db_id, "type": "single_property", "single_property": {}}},
             }
         })
@@ -317,7 +319,7 @@ def sync_hdd(hdd_db_id: str, report: dict, disk_info: dict, user_name: str = "")
         "Unassigned": {"number": scan_info["unassigned_folders"]},
         "Letzter Scan": {"date": {"start": scan_info["scan_date"]}},
         "Volume UUID": {"rich_text": [{"text": {"content": scan_info.get("volume_uuid", "")}}]},
-        "Zuletzt genutzt von": {"rich_text": [{"text": {"content": user_name}}]},
+        "Zuletzt genutzt von": {"select": {"name": user_name}} if user_name else {"select": None},
     }
 
     existing_id = find_page_by_title(hdd_db_id, hdd_name)
@@ -332,7 +334,7 @@ def sync_hdd(hdd_db_id: str, report: dict, disk_info: dict, user_name: str = "")
         return page["id"]
 
 
-def sync_projects(projects_db_id: str, report: dict, hdd_page_id: str) -> None:
+def sync_projects(projects_db_id: str, report: dict, hdd_page_id: str, scan_date: str = "") -> None:
     # Bestehende Einträge für diese HDD laden
     existing_pages = query_database(
         projects_db_id,
@@ -361,6 +363,8 @@ def sync_projects(projects_db_id: str, report: dict, hdd_page_id: str) -> None:
             "Status": {"select": {"name": "Valid"}},
             "Absoluter Pfad": {"rich_text": [{"text": {"content": project.get("absolute_path", "")}}]},
         }
+        if scan_date:
+            properties["Letzter Scan"] = {"date": {"start": scan_date}}
         if project.get("date"):
             properties["Datum"] = {"date": {"start": project["date"]}}
         if project.get("last_modified"):
@@ -381,6 +385,8 @@ def sync_projects(projects_db_id: str, report: dict, hdd_page_id: str) -> None:
                 "Projekt": {"relation": [{"id": parent_page_id}]},
                 "Absoluter Pfad": {"rich_text": [{"text": {"content": child.get("absolute_path", "")}}]},
             }
+            if scan_date:
+                child_props["Letzter Scan"] = {"date": {"start": scan_date}}
             if child.get("type"):
                 child_props["Typ"] = {"select": {"name": child["type"]}}
                 child_props["Status"] = {"select": {"name": "Valid"}}
@@ -409,6 +415,8 @@ def sync_projects(projects_db_id: str, report: dict, hdd_page_id: str) -> None:
             "Status": {"select": {"name": "Unassigned"}},
             "Absoluter Pfad": {"rich_text": [{"text": {"content": folder.get("absolute_path", "")}}]},
         }
+        if scan_date:
+            properties["Letzter Scan"] = {"date": {"start": scan_date}}
         if folder.get("last_modified"):
             properties["Letzte Änderung"] = {"date": {"start": folder["last_modified"][:10]}}
 
@@ -455,8 +463,9 @@ def main():
     print("Notion-Sync gestartet...")
     hdd_db_id, projects_db_id = ensure_databases()
 
+    scan_date = report["scan_info"].get("scan_date", "")
     hdd_page_id = sync_hdd(hdd_db_id, report, disk_info, user_name)
-    sync_projects(projects_db_id, report, hdd_page_id)
+    sync_projects(projects_db_id, report, hdd_page_id, scan_date)
 
     print("\nSync abgeschlossen!")
 
@@ -487,9 +496,10 @@ def run_sync(report_path: str) -> None:
     config = load_config()
     user_name = config.get("user_name", "")
 
+    scan_date = report["scan_info"].get("scan_date", "")
     hdd_db_id, projects_db_id = ensure_databases()
     hdd_page_id = sync_hdd(hdd_db_id, report, disk_info, user_name)
-    sync_projects(projects_db_id, report, hdd_page_id)
+    sync_projects(projects_db_id, report, hdd_page_id, scan_date)
 
 
 if __name__ == "__main__":

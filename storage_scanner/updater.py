@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
@@ -25,7 +26,8 @@ def check_for_update() -> dict | None:
         None wenn aktuelle Version aktuell ist oder Check fehlschlägt.
     """
     try:
-        req = Request(VERSION_URL, headers={"User-Agent": "NXT-Scanner-Updater"})
+        url = f"{VERSION_URL}?t={int(time.time())}"
+        req = Request(url, headers={"User-Agent": "NXT-Scanner-Updater", "Cache-Control": "no-cache"})
         with urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
 

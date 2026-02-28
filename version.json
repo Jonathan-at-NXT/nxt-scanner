@@ -1,5 +1,5 @@
 {
-  "version": "1.2.2",
+  "version": "1.2.3",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "App-Icon & Menubar-Logo, Letzter Scan mit Uhrzeit, SI-Einheiten (Finder-kompatibel)."
+  "release_notes": "Letzter Scan mit Uhrzeit bei Projekten, Zuletzt genutzt von als Tag, Update-Cache-Fix."
 }
