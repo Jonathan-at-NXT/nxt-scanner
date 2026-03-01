@@ -378,14 +378,22 @@ class StorageScannerApp(rumps.App):
         if not self._update_info:
             return
         version = self._update_info["version"]
-        self.update_item.title = f"Update wird installiert..."
+        response = rumps.alert(
+            title="NXT Scanner Update",
+            message=f"Version {version} herunterladen und installieren?\n\nDie App wird danach automatisch neu gestartet.",
+            ok="Jetzt installieren",
+            cancel="Abbrechen",
+        )
+        if response != 1:
+            return
+        self.update_item.title = "Herunterladen..."
         self.update_item.callback = None
         threading.Thread(target=self._install_update_worker, args=(version,), daemon=True).start()
 
     def _install_update_worker(self, version: str):
         try:
-            rumps.notification("NXT Scanner", "Update", f"v{version} wird heruntergeladen...")
-            install_update(version)
+            install_update(version, on_status=self._set_update_status)
+            self.update_item.title = "Update installiert – Neustart..."
             rumps.notification("NXT Scanner", "Update installiert", f"v{version} – App startet neu...")
             import time
             time.sleep(2)
@@ -393,9 +401,12 @@ class StorageScannerApp(rumps.App):
             import os
             os._exit(1)
         except Exception as e:
-            self.update_item.title = f"Update fehlgeschlagen"
+            self.update_item.title = "Update fehlgeschlagen – Erneut versuchen"
             self.update_item.callback = self._do_install_update
             rumps.notification("NXT Scanner", "Update fehlgeschlagen", str(e)[:100])
+
+    def _set_update_status(self, status: str):
+        self.update_item.title = status
 
     def quit_app(self, _):
         rumps.quit_application()

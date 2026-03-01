@@ -57,12 +57,20 @@ def check_for_update() -> dict | None:
     return None
 
 
-def install_update(version: str) -> bool:
+def install_update(version: str, on_status=None) -> bool:
     """Lädt die neue Version herunter und ersetzt die installierte App.
+
+    Args:
+        version: Zielversion (z.B. "1.5.0").
+        on_status: Optionaler Callback(status_text) für Fortschritts-Updates.
 
     Returns:
         True wenn erfolgreich – Caller sollte die App danach neustarten.
     """
+    def _status(msg):
+        if on_status:
+            on_status(msg)
+
     zip_url = f"{GITHUB_RELEASE_BASE}/v{version}/NXT-Scanner-{version}.zip"
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -70,11 +78,13 @@ def install_update(version: str) -> bool:
         zip_path = tmp_path / "update.zip"
 
         # Download
+        _status(f"Herunterladen... (v{version})")
         req = Request(zip_url, headers={"User-Agent": "NXT-Scanner-Updater"})
         with urlopen(req, timeout=120, context=_SSL_CTX) as resp:
             zip_path.write_bytes(resp.read())
 
         # Entpacken
+        _status("Entpacken...")
         with zipfile.ZipFile(zip_path) as zf:
             zf.extractall(tmp_path)
 
@@ -86,6 +96,7 @@ def install_update(version: str) -> bool:
         subprocess.run(["xattr", "-cr", str(new_app)], capture_output=True)
 
         # Alte App ersetzen
+        _status("Installieren...")
         if APP_INSTALL_PATH.exists():
             shutil.rmtree(APP_INSTALL_PATH)
         shutil.copytree(new_app, APP_INSTALL_PATH, symlinks=True)
