@@ -442,34 +442,93 @@ def ask_for_setup() -> None:
         save_config(config)
 
 
-def register_login_item() -> None:
-    """Registriert die App als Login-Item (startet automatisch bei Anmeldung)."""
-    try:
-        import subprocess
-        app_path = "/Applications/NXT Scanner.app"
-        # Prüfen ob bereits als Login-Item registriert
-        result = subprocess.run(
-            ["osascript", "-e",
-             'tell application "System Events" to get the name of every login item'],
-            capture_output=True, text=True,
-        )
-        if "NXT Scanner" in result.stdout:
-            return
+def register_launchd_agent() -> None:
+    """Installiert einen launchd LaunchAgent für automatischen Start und Überwachung.
 
+    Vorteile gegenüber Login Items:
+    - Startet App neu bei Absturz (KeepAlive)
+    - Garantiert genau 1 Instanz (gleicher Label)
+    - Startet bei Login (RunAtLoad)
+    """
+    import subprocess
+    import plistlib
+
+    label = "com.nxtstudios.nxt-scanner"
+    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+    app_executable = "/Applications/NXT Scanner.app/Contents/MacOS/NXT Scanner"
+
+    if not Path(app_executable).exists():
+        return
+
+    plist_data = {
+        "Label": label,
+        "ProgramArguments": [app_executable],
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ProcessType": "Interactive",
+    }
+
+    # Prüfen ob sich der Inhalt geändert hat
+    needs_update = True
+    if plist_path.exists():
+        try:
+            with open(plist_path, "rb") as f:
+                existing = plistlib.load(f)
+            if existing == plist_data:
+                needs_update = False
+        except Exception:
+            pass
+
+    if needs_update:
+        # Alten Agent entladen falls vorhanden
         subprocess.run(
-            ["osascript", "-e",
-             f'tell application "System Events" to make login item at end '
-             f'with properties {{path:"{app_path}", hidden:false}}'],
-            capture_output=True, text=True,
+            ["launchctl", "bootout", f"gui/{__import__('os').getuid()}/{label}"],
+            capture_output=True,
         )
-    except Exception:
-        pass
+
+        plist_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(plist_path, "wb") as f:
+            plistlib.dump(plist_data, f)
+
+    # Agent laden falls nicht aktiv
+    result = subprocess.run(
+        ["launchctl", "print", f"gui/{__import__('os').getuid()}/{label}"],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        subprocess.run(
+            ["launchctl", "bootstrap", f"gui/{__import__('os').getuid()}", str(plist_path)],
+            capture_output=True,
+        )
+
+
+_lock_file = None  # Muss global bleiben damit der Lock nicht released wird
+
+
+def acquire_singleton_lock() -> bool:
+    """Versucht einen exklusiven File-Lock zu setzen. Gibt False zurück wenn bereits eine Instanz läuft."""
+    import fcntl
+    global _lock_file
+    lock_path = Path.home() / "Library" / "Application Support" / "NXT Scanner" / ".lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    _lock_file = open(lock_path, "w")
+    try:
+        fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_file.write(str(__import__("os").getpid()))
+        _lock_file.flush()
+        return True
+    except OSError:
+        _lock_file.close()
+        return False
 
 
 if __name__ == "__main__":
     NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    if not acquire_singleton_lock():
+        import sys
+        sys.exit(0)
     migrate_legacy_data()
     ensure_dirs()
     ask_for_setup()
-    register_login_item()
+    register_launchd_agent()
     StorageScannerApp().run()

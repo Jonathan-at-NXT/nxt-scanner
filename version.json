@@ -1,5 +1,5 @@
 {
-  "version": "1.2.3",
+  "version": "1.3.0",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Letzter Scan mit Uhrzeit bei Projekten, Zuletzt genutzt von als Tag, Update-Cache-Fix."
+  "release_notes": "Singleton-Schutz, launchd-Überwachung, Zeitzonen-Fix, Nutzer-Tags."
 }

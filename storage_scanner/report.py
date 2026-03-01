@@ -1,7 +1,7 @@
 """JSON-Report generieren und speichern."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .utils import get_volume_uuid
@@ -21,7 +21,7 @@ def generate_report(scanned_path: str, projects: list[dict], unassigned: list[di
     return {
         "scan_info": {
             "scanned_path": scanned_path,
-            "scan_date": datetime.now().isoformat(),
+            "scan_date": datetime.now(timezone.utc).astimezone().isoformat(),
             "total_folders": len(projects) + len(unassigned),
             "valid_folders": len(projects),
             "unassigned_folders": len(unassigned),
