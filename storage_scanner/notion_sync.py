@@ -1,13 +1,14 @@
 """Notion Sync – Liest einen Scan-Report und synchronisiert ihn mit Notion.
 
-Erstellt zwei verknüpfte Datenbanken (Datenträger + Projekte) und aktualisiert
-bestehende Einträge bei erneutem Scan.
+Erstellt vier verknüpfte Datenbanken (Datenträger + Speicherungen + Projekte + Log)
+und aktualisiert bestehende Einträge bei erneutem Scan.
 """
 
 import argparse
 import json
 import shutil
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import httpx
@@ -142,8 +143,90 @@ def create_projects_database(hdd_db_id: str) -> str:
     return db_id
 
 
+def create_aggregated_projects_database(hdd_db_id: str, speicherungen_db_id: str) -> str:
+    """Erstellt die aggregierte Projekte-Datenbank (eine Zeile pro Projekt)."""
+    db = api_post("databases", {
+        "parent": {"type": "page_id", "page_id": _get_parent_page_id()},
+        "title": [{"type": "text", "text": {"content": "Projekte"}}],
+        "properties": {
+            "Name": {"title": {}},
+            "Projektname": {"rich_text": {}},
+            "Datum": {"date": {}},
+            "Typen": {
+                "multi_select": {
+                    "options": [
+                        {"name": "FOOTAGE", "color": "blue"},
+                        {"name": "PHOTOS", "color": "green"},
+                        {"name": "WORKING", "color": "orange"},
+                        {"name": "BTS", "color": "yellow"},
+                        {"name": "PROJECT", "color": "purple"},
+                        {"name": "PROXIES", "color": "pink"},
+                    ]
+                }
+            },
+            "HDDs": {"relation": {"database_id": hdd_db_id, "type": "single_property", "single_property": {}}},
+            "Speicherungen": {"relation": {"database_id": speicherungen_db_id, "type": "single_property", "single_property": {}}},
+            "Gesamtgröße (GB)": {"number": {"format": "number"}},
+            "Übersicht": {"rich_text": {}},
+            "Mismatch": {"checkbox": {}},
+            "Letzter Scan": {"date": {}},
+        },
+    })
+    print(f"  Projekte-Datenbank (aggregiert) erstellt: {db['id']}")
+    return db["id"]
+
+
+def create_log_database(aggregated_db_id: str) -> str:
+    """Erstellt die Log-Datenbank für Mismatch-Warnungen."""
+    db = api_post("databases", {
+        "parent": {"type": "page_id", "page_id": _get_parent_page_id()},
+        "title": [{"type": "text", "text": {"content": "Log"}}],
+        "properties": {
+            "Name": {"title": {}},
+            "Typ": {
+                "select": {
+                    "options": [
+                        {"name": "SIZE_MISMATCH", "color": "red"},
+                    ]
+                }
+            },
+            "Projekt": {"relation": {"database_id": aggregated_db_id, "type": "single_property", "single_property": {}}},
+            "Ordnertyp": {
+                "select": {
+                    "options": [
+                        {"name": "FOOTAGE", "color": "blue"},
+                        {"name": "PHOTOS", "color": "green"},
+                        {"name": "WORKING", "color": "orange"},
+                        {"name": "BTS", "color": "yellow"},
+                        {"name": "PROJECT", "color": "purple"},
+                        {"name": "PROXIES", "color": "pink"},
+                    ]
+                }
+            },
+            "Details": {"rich_text": {}},
+            "HDDs": {"rich_text": {}},
+            "Differenz (GB)": {"number": {"format": "number"}},
+            "Status": {
+                "select": {
+                    "options": [
+                        {"name": "Open", "color": "red"},
+                        {"name": "Resolved", "color": "green"},
+                    ]
+                }
+            },
+            "Erkannt am": {"date": {}},
+            "Letzter Scan": {"date": {}},
+        },
+    })
+    print(f"  Log-Datenbank erstellt: {db['id']}")
+    return db["id"]
+
+
 def _find_existing_databases() -> tuple[str | None, str | None]:
-    """Sucht bestehende Datenbanken unter der Parent Page."""
+    """Sucht bestehende Kern-Datenbanken (Datenträger + Speicherungen) unter der Parent Page.
+
+    Erkennt auch die alte "Projekte"-DB (ohne Mismatch-Property) als Speicherungen-DB.
+    """
     parent_id = _get_parent_page_id()
     if not parent_id:
         return None, None
@@ -153,7 +236,7 @@ def _find_existing_databases() -> tuple[str | None, str | None]:
 
     try:
         body = {"filter": {"property": "object", "value": "database"}}
-        resp = api_post(f"search", body)
+        resp = api_post("search", body)
         for result in resp.get("results", []):
             if result.get("object") != "database":
                 continue
@@ -165,9 +248,13 @@ def _find_existing_databases() -> tuple[str | None, str | None]:
             # Name prüfen
             title_parts = result.get("title", [])
             title = title_parts[0]["plain_text"] if title_parts else ""
+            props = result.get("properties", {})
             if title == "Datenträger":
                 hdd_db_id = result["id"]
-            elif title == "Projekte":
+            elif title == "Speicherungen":
+                projects_db_id = result["id"]
+            elif title == "Projekte" and "Mismatch" not in props:
+                # Alte "Projekte"-DB (vor Umbenennung zu "Speicherungen")
                 projects_db_id = result["id"]
     except Exception:
         pass
@@ -175,11 +262,54 @@ def _find_existing_databases() -> tuple[str | None, str | None]:
     return hdd_db_id, projects_db_id
 
 
-def ensure_databases() -> tuple[str, str]:
+def _find_new_databases() -> dict:
+    """Sucht die neuen Datenbanken (aggregierte Projekte + Log) unter der Parent Page.
+
+    Unterscheidet neue "Projekte" (mit Mismatch-Property) von alter "Projekte"/Speicherungen.
+    """
+    parent_id = _get_parent_page_id()
+    if not parent_id:
+        return {}
+
+    found = {}
+
+    try:
+        body = {"filter": {"property": "object", "value": "database"}}
+        resp = api_post("search", body)
+        for result in resp.get("results", []):
+            if result.get("object") != "database":
+                continue
+            parent = result.get("parent", {})
+            result_parent_id = parent.get("page_id", "").replace("-", "")
+            if result_parent_id != parent_id.replace("-", ""):
+                continue
+            title_parts = result.get("title", [])
+            title = title_parts[0]["plain_text"] if title_parts else ""
+            props = result.get("properties", {})
+            if title == "Projekte" and "Mismatch" in props:
+                found["aggregated_projects_db_id"] = result["id"]
+            elif title == "Log":
+                found["log_db_id"] = result["id"]
+    except Exception:
+        pass
+
+    return found
+
+
+def ensure_databases() -> tuple[str, str, str, str]:
+    """Stellt sicher, dass alle 4 Datenbanken existieren.
+
+    Returns:
+        Tuple of (hdd_db_id, projects_db_id, aggregated_db_id, log_db_id)
+        where projects_db_id = Speicherungen-DB (abwärtskompatibel).
+    """
     config = load_config()
     hdd_db_id = config.get("hdd_db_id")
     projects_db_id = config.get("projects_db_id")
+    aggregated_db_id = config.get("aggregated_projects_db_id")
+    log_db_id = config.get("log_db_id")
 
+    # Bestehende Kern-DBs validieren
     if hdd_db_id:
         try:
             api_get(f"databases/{hdd_db_id}")
@@ -193,7 +323,19 @@ def ensure_databases() -> tuple[str, str]:
         except httpx.HTTPStatusError:
             projects_db_id = None
 
-    # Bestehende Datenbanken suchen bevor neue erstellt werden
+    if aggregated_db_id:
+        try:
+            api_get(f"databases/{aggregated_db_id}")
+        except httpx.HTTPStatusError:
+            aggregated_db_id = None
+
+    if log_db_id:
+        try:
+            api_get(f"databases/{log_db_id}")
+        except httpx.HTTPStatusError:
+            log_db_id = None
+
+    # Bestehende Kern-Datenbanken suchen bevor neue erstellt werden
     if not hdd_db_id or not projects_db_id:
         found_hdd, found_projects = _find_existing_databases()
         if not hdd_db_id and found_hdd:
@@ -208,13 +350,44 @@ def ensure_databases() -> tuple[str, str]:
     elif not projects_db_id:
         projects_db_id = create_projects_database(hdd_db_id)
 
+    # DB-Titel-Migration: "Projekte" → "Speicherungen" (idempotent)
+    if not config.get("db_title_migrated"):
+        try:
+            db_info = api_get(f"databases/{projects_db_id}")
+            title_parts = db_info.get("title", [])
+            title = title_parts[0]["plain_text"] if title_parts else ""
+            if title == "Projekte":
+                api_patch(f"databases/{projects_db_id}", {
+                    "title": [{"type": "text", "text": {"content": "Speicherungen"}}]
+                })
+                print("  DB umbenannt: 'Projekte' → 'Speicherungen'")
+        except Exception:
+            pass
+        config["db_title_migrated"] = True
+
+    # Neue Datenbanken suchen
+    if not aggregated_db_id or not log_db_id:
+        found_new = _find_new_databases()
+        if not aggregated_db_id:
+            aggregated_db_id = found_new.get("aggregated_projects_db_id")
+        if not log_db_id:
+            log_db_id = found_new.get("log_db_id")
+
+    # Neue Datenbanken erstellen falls nötig
+    if not aggregated_db_id:
+        aggregated_db_id = create_aggregated_projects_database(hdd_db_id, projects_db_id)
+    if not log_db_id:
+        log_db_id = create_log_database(aggregated_db_id)
+
     config["hdd_db_id"] = hdd_db_id
     config["projects_db_id"] = projects_db_id
+    config["aggregated_projects_db_id"] = aggregated_db_id
+    config["log_db_id"] = log_db_id
     save_config(config)
 
     migrate_schema(hdd_db_id, projects_db_id)
 
-    return hdd_db_id, projects_db_id
+    return hdd_db_id, projects_db_id, aggregated_db_id, log_db_id
 
 
 def migrate_schema(hdd_db_id: str, projects_db_id: str) -> None:
@@ -431,6 +604,266 @@ def sync_projects(projects_db_id: str, report: dict, hdd_page_id: str, scan_date
     print(f"  {total} Ordner synchronisiert")
 
 
+# ── Aggregation + Mismatch ──────────────────────────────────────────
+
+def _has_size_mismatch(entries: list[dict]) -> bool:
+    """Prüft ob Größenunterschiede bei gleichen Typen auf verschiedenen HDDs existieren.
+
+    Threshold: 0% — jeder Unterschied wird gemeldet.
+    Typen mit nur 1 Kopie werden ignoriert.
+    """
+    by_type = defaultdict(list)
+    for e in entries:
+        if e["type"]:
+            by_type[e["type"]].append(e["size_gb"])
+
+    for sizes in by_type.values():
+        if len(sizes) >= 2 and len(set(sizes)) > 1:
+            return True
+    return False
+
+
+def sync_aggregated_projects(
+    aggregated_db_id: str,
+    projects_db_id: str,
+    hdd_db_id: str,
+    scan_date: str,
+) -> list[dict]:
+    """Aggregiert alle Speicherungen zu Projekt-Übersichten.
+
+    Liest ALLE Valid-Einträge aus der Speicherungen-DB, gruppiert nach
+    Datum + Projektname und upserted aggregierte Zeilen.
+
+    Returns:
+        Liste der Projektgruppen für Mismatch-Analyse.
+    """
+    # 1. Alle Valid-Einträge aus Speicherungen laden
+    all_entries = query_database(projects_db_id, {
+        "property": "Status",
+        "select": {"equals": "Valid"},
+    })
+
+    # 2. Alle HDD-Seiten laden (für Name-Lookup)
+    hdd_pages = query_database(hdd_db_id)
+    hdd_names = {}
+    for page in hdd_pages:
+        title = page["properties"]["Name"]["title"]
+        if title:
+            hdd_names[page["id"]] = title[0]["plain_text"]
+
+    # 3. Bestehende aggregierte Seiten laden
+    existing_agg = query_database(aggregated_db_id)
+    existing_map = {}
+    for page in existing_agg:
+        title = page["properties"]["Name"]["title"]
+        if title:
+            existing_map[title[0]["plain_text"]] = page["id"]
+
+    # 4. Nach Aggregations-Key gruppieren (Datum_Projektname)
+    groups = defaultdict(list)
+    for entry in all_entries:
+        props = entry["properties"]
+
+        # Datum extrahieren
+        date_prop = props.get("Datum", {}).get("date")
+        date_str = date_prop["start"] if date_prop else None
+
+        # Projektname extrahieren
+        pname_parts = props.get("Projektname", {}).get("rich_text", [])
+        project_name = pname_parts[0]["plain_text"] if pname_parts else ""
+
+        # Typ extrahieren
+        type_prop = props.get("Typ", {}).get("select")
+        folder_type = type_prop["name"] if type_prop else None
+
+        # Größe extrahieren
+        size_gb = props.get("Größe (GB)", {}).get("number", 0) or 0
+
+        # HDD-Relation extrahieren
+        hdd_rel = props.get("HDD", {}).get("relation", [])
+        hdd_id = hdd_rel[0]["id"] if hdd_rel else None
+        hdd_name = hdd_names.get(hdd_id, "?") if hdd_id else "?"
+
+        # Ist Kind eines PROJECT-Ordners? (hat Projekt self-relation)
+        projekt_rel = props.get("Projekt", {}).get("relation", [])
+        is_child = len(projekt_rel) > 0
+
+        if not date_str or not project_name:
+            continue
+
+        agg_key = f"{date_str}_{project_name}"
+        groups[agg_key].append({
+            "page_id": entry["id"],
+            "date": date_str,
+            "project_name": project_name,
+            "type": folder_type,
+            "size_gb": size_gb,
+            "hdd_id": hdd_id,
+            "hdd_name": hdd_name,
+            "is_child": is_child,
+        })
+
+    # 5. Aggregierte Zeilen upserten
+    project_groups = []
+    for agg_key, entries in groups.items():
+        date_str = entries[0]["date"]
+        project_name = entries[0]["project_name"]
+
+        # Typen, HDDs, Speicherungen-IDs sammeln
+        types = sorted(set(e["type"] for e in entries if e["type"]))
+        hdd_ids = sorted(set(e["hdd_id"] for e in entries if e["hdd_id"]))
+        speicherung_ids = [e["page_id"] for e in entries]
+
+        # Gesamtgröße: nur Top-Level-Einträge zählen (keine Children, um Doppelzählung zu vermeiden)
+        total_size = round(sum(e["size_gb"] for e in entries if not e["is_child"]), 2)
+
+        # Übersicht-String bauen: "TYPE: HDD (size) | TYPE: HDD (size)"
+        by_type = defaultdict(list)
+        for e in entries:
+            if e["type"]:
+                by_type[e["type"]].append(f"{e['hdd_name']} ({e['size_gb']} GB)")
+        overview_parts = []
+        for t in sorted(by_type.keys()):
+            copies = ", ".join(by_type[t])
+            overview_parts.append(f"{t}: {copies}")
+        overview = " | ".join(overview_parts)
+
+        # Notion rich_text Limit: 2000 Zeichen
+        if len(overview) > 2000:
+            overview = overview[:1997] + "..."
+
+        # Mismatch prüfen
+        has_mismatch = _has_size_mismatch(entries)
+
+        properties = {
+            "Name": {"title": [{"text": {"content": agg_key}}]},
+            "Projektname": {"rich_text": [{"text": {"content": project_name}}]},
+            "Datum": {"date": {"start": date_str}},
+            "Typen": {"multi_select": [{"name": t} for t in types]},
+            "HDDs": {"relation": [{"id": hid} for hid in hdd_ids]},
+            "Speicherungen": {"relation": [{"id": sid} for sid in speicherung_ids]},
+            "Gesamtgröße (GB)": {"number": total_size},
+            "Übersicht": {"rich_text": [{"text": {"content": overview}}]},
+            "Mismatch": {"checkbox": has_mismatch},
+        }
+        if scan_date:
+            properties["Letzter Scan"] = {"date": {"start": scan_date}}
+
+        _upsert_page(aggregated_db_id, existing_map, agg_key, properties)
+
+        project_groups.append({
+            "agg_key": agg_key,
+            "date": date_str,
+            "project_name": project_name,
+            "entries": entries,
+            "has_mismatch": has_mismatch,
+        })
+
+    # Aggregierte Seiten archivieren, deren Key keine Einträge mehr hat
+    for name, page_id in existing_map.items():
+        if name not in groups:
+            api_patch(f"pages/{page_id}", {"archived": True})
+            print(f"  Aggregiertes Projekt archiviert: {name}")
+
+    print(f"  {len(groups)} aggregierte Projekte synchronisiert")
+    return project_groups
+
+
+def sync_log(
+    log_db_id: str,
+    aggregated_db_id: str,
+    project_groups: list[dict],
+    scan_date: str,
+) -> None:
+    """Erstellt/aktualisiert Log-Einträge für Größen-Mismatches.
+
+    Pro Typ mit ≥2 Kopien wird geprüft ob die Größen exakt übereinstimmen.
+    Neue Mismatches → Status "Open", gelöste → Status "Resolved".
+    """
+    # Bestehende Log-Einträge laden
+    existing_logs = query_database(log_db_id)
+    log_map = {}  # name → {id, status}
+    for page in existing_logs:
+        title = page["properties"]["Name"]["title"]
+        if title:
+            name = title[0]["plain_text"]
+            status_prop = page["properties"].get("Status", {}).get("select")
+            status = status_prop["name"] if status_prop else None
+            log_map[name] = {"id": page["id"], "status": status}
+
+    # Aggregierte Projekt-Seiten für Relation-Lookup laden
+    agg_pages = query_database(aggregated_db_id)
+    agg_page_map = {}
+    for page in agg_pages:
+        title = page["properties"]["Name"]["title"]
+        if title:
+            agg_page_map[title[0]["plain_text"]] = page["id"]
+
+    for group in project_groups:
+        agg_key = group["agg_key"]
+        entries = group["entries"]
+
+        # Nach Typ gruppieren
+        by_type = defaultdict(list)
+        for e in entries:
+            if e["type"]:
+                by_type[e["type"]].append(e)
+
+        for type_name, type_entries in by_type.items():
+            if len(type_entries) < 2:
+                continue
+
+            log_name = f"MISMATCH: {agg_key} {type_name}"
+            sizes = [e["size_gb"] for e in type_entries]
+            has_diff = len(set(sizes)) > 1
+            existing = log_map.get(log_name)
+
+            if has_diff:
+                # Mismatch gefunden
+                details_parts = [f"{e['hdd_name']}: {e['size_gb']} GB" for e in type_entries]
+                details = " vs ".join(details_parts)
+                diff = round(max(sizes) - min(sizes), 2)
+                details += f" (diff: {diff} GB)"
+                hdd_names_str = ", ".join(e["hdd_name"] for e in type_entries)
+                agg_page_id = agg_page_map.get(agg_key)
+
+                properties = {
+                    "Name": {"title": [{"text": {"content": log_name}}]},
+                    "Typ": {"select": {"name": "SIZE_MISMATCH"}},
+                    "Ordnertyp": {"select": {"name": type_name}},
+                    "Details": {"rich_text": [{"text": {"content": details}}]},
+                    "HDDs": {"rich_text": [{"text": {"content": hdd_names_str}}]},
+                    "Differenz (GB)": {"number": diff},
+                    "Status": {"select": {"name": "Open"}},
+                }
+                if scan_date:
+                    properties["Letzter Scan"] = {"date": {"start": scan_date}}
+                if agg_page_id:
+                    properties["Projekt"] = {"relation": [{"id": agg_page_id}]}
+
+                if existing:
+                    # Wiedereröffnet (Resolved → Open): Erkannt am aktualisieren
+                    if existing["status"] == "Resolved" and scan_date:
+                        properties["Erkannt am"] = {"date": {"start": scan_date}}
+                    api_patch(f"pages/{existing['id']}", {"properties": properties})
+                else:
+                    # Neuer Mismatch
+                    if scan_date:
+                        properties["Erkannt am"] = {"date": {"start": scan_date}}
+                    api_post("pages", {"parent": {"database_id": log_db_id}, "properties": properties})
+                    print(f"  Log: {log_name}")
+
+            elif existing and existing["status"] == "Open":
+                # Größen stimmen wieder überein → Resolved
+                resolve_props = {
+                    "Status": {"select": {"name": "Resolved"}},
+                }
+                if scan_date:
+                    resolve_props["Letzter Scan"] = {"date": {"start": scan_date}}
+                api_patch(f"pages/{existing['id']}", {"properties": resolve_props})
+                print(f"  Log resolved: {log_name}")
+
+
 # ── Main ────────────────────────────────────────────────────────────
 
 def main():
@@ -460,11 +893,15 @@ def main():
     user_name = config.get("user_name", "")
 
     print("Notion-Sync gestartet...")
-    hdd_db_id, projects_db_id = ensure_databases()
+    hdd_db_id, projects_db_id, aggregated_db_id, log_db_id = ensure_databases()
 
     scan_date = report["scan_info"].get("scan_date", "")
     hdd_page_id = sync_hdd(hdd_db_id, report, disk_info, user_name)
     sync_projects(projects_db_id, report, hdd_page_id, scan_date)
+
+    # Aggregation + Mismatch-Log
+    project_groups = sync_aggregated_projects(aggregated_db_id, projects_db_id, hdd_db_id, scan_date)
+    sync_log(log_db_id, aggregated_db_id, project_groups, scan_date)
 
     print("\nSync abgeschlossen!")
 
@@ -496,9 +933,13 @@ def run_sync(report_path: str) -> None:
     user_name = config.get("user_name", "")
 
     scan_date = report["scan_info"].get("scan_date", "")
-    hdd_db_id, projects_db_id = ensure_databases()
+    hdd_db_id, projects_db_id, aggregated_db_id, log_db_id = ensure_databases()
     hdd_page_id = sync_hdd(hdd_db_id, report, disk_info, user_name)
     sync_projects(projects_db_id, report, hdd_page_id, scan_date)
+
+    # Aggregation + Mismatch-Log
+    project_groups = sync_aggregated_projects(aggregated_db_id, projects_db_id, hdd_db_id, scan_date)
+    sync_log(log_db_id, aggregated_db_id, project_groups, scan_date)
 
 
 if __name__ == "__main__":

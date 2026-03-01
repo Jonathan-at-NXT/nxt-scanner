@@ -1,5 +1,5 @@
 {
-  "version": "1.3.3",
+  "version": "1.4.0",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Update-Check via GitHub API (kein CDN-Cache mehr)."
+  "release_notes": "Aggregierte Projekte-DB + Mismatch-Log. Speicherungen zeigt Einzel-Einträge, neue Projekte-DB zeigt Übersicht pro Projekt mit Typen, HDDs und Größenvergleich."
 }
