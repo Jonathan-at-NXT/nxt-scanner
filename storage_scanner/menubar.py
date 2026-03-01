@@ -21,7 +21,7 @@ from .paths import (
     CONFIG_PATH, LOG_PATH, LAST_SCAN_PATH, REPORTS_DIR,
     ensure_dirs, migrate_legacy_data, get_resource_path,
 )
-from .updater import check_for_update
+from .updater import check_for_update, install_update
 
 RESCAN_INTERVAL_SECONDS = 3600  # 1 Stunde
 
@@ -364,8 +364,8 @@ class StorageScannerApp(rumps.App):
         info = check_for_update()
         if info:
             self._update_info = info
-            self.update_item.title = f"Update verfügbar: v{info['version']}"
-            self.update_item.callback = self._open_download
+            self.update_item.title = f"Update verfügbar: v{info['version']} – Jetzt installieren"
+            self.update_item.callback = self._do_install_update
             rumps.notification(
                 "NXT Scanner Update",
                 f"Version {info['version']} verfügbar",
@@ -374,9 +374,28 @@ class StorageScannerApp(rumps.App):
         elif notify_if_current:
             rumps.notification("NXT Scanner", "", f"Du hast die neueste Version ({__version__}).")
 
-    def _open_download(self, _):
-        if self._update_info:
-            webbrowser.open(self._update_info["download_url"])
+    def _do_install_update(self, _):
+        if not self._update_info:
+            return
+        version = self._update_info["version"]
+        self.update_item.title = f"Update wird installiert..."
+        self.update_item.callback = None
+        threading.Thread(target=self._install_update_worker, args=(version,), daemon=True).start()
+
+    def _install_update_worker(self, version: str):
+        try:
+            rumps.notification("NXT Scanner", "Update", f"v{version} wird heruntergeladen...")
+            install_update(version)
+            rumps.notification("NXT Scanner", "Update installiert", f"v{version} – App startet neu...")
+            import time
+            time.sleep(2)
+            # Non-zero Exit → launchd startet die neue Version
+            import os
+            os._exit(1)
+        except Exception as e:
+            self.update_item.title = f"Update fehlgeschlagen"
+            self.update_item.callback = self._do_install_update
+            rumps.notification("NXT Scanner", "Update fehlgeschlagen", str(e)[:100])
 
     def quit_app(self, _):
         rumps.quit_application()

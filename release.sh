@@ -18,11 +18,11 @@ echo -e "${BOLD}NXT Scanner v${VERSION} – Build starten${RESET}"
 echo ""
 
 # ── 1. Aufräumen ──────────────────────────────────────────────────
-echo -e "${BOLD}[1/5] Aufräumen...${RESET}"
+echo -e "${BOLD}[1/6] Aufräumen...${RESET}"
 rm -rf build/ dist/
 
 # ── 2. Abhängigkeiten prüfen ─────────────────────────────────────
-echo -e "${BOLD}[2/5] Abhängigkeiten prüfen...${RESET}"
+echo -e "${BOLD}[2/6] Abhängigkeiten prüfen...${RESET}"
 
 if ! command -v pyinstaller &>/dev/null; then
     echo "  PyInstaller nicht gefunden. Installiere..."
@@ -38,7 +38,7 @@ fi
 echo "  Alles vorhanden"
 
 # ── 3. App bauen ─────────────────────────────────────────────────
-echo -e "${BOLD}[3/5] App bauen (PyInstaller)...${RESET}"
+echo -e "${BOLD}[3/6] App bauen (PyInstaller)...${RESET}"
 python3 -m PyInstaller nxt_scanner.spec --noconfirm --clean 2>&1 | tail -5
 
 if [ ! -d "dist/NXT Scanner.app" ]; then
@@ -48,12 +48,17 @@ fi
 echo "  dist/NXT Scanner.app erstellt"
 
 # ── 4. Code-Signierung ──────────────────────────────────────────
-echo -e "${BOLD}[4/5] Code-Signierung (ad-hoc)...${RESET}"
+echo -e "${BOLD}[4/6] Code-Signierung (ad-hoc)...${RESET}"
 codesign --force --deep --sign - "dist/NXT Scanner.app"
 echo "  Signiert"
 
-# ── 5. DMG erstellen ────────────────────────────────────────────
-echo -e "${BOLD}[5/5] DMG erstellen...${RESET}"
+# ── 5. ZIP + DMG erstellen ──────────────────────────────────────
+echo -e "${BOLD}[5/6] ZIP erstellen (für Auto-Update)...${RESET}"
+ZIP_NAME="NXT-Scanner-${VERSION}.zip"
+(cd dist && zip -r -q "${ZIP_NAME}" "NXT Scanner.app")
+echo "  dist/${ZIP_NAME} erstellt"
+
+echo -e "${BOLD}[6/6] DMG erstellen...${RESET}"
 DMG_NAME="NXT-Scanner-${VERSION}.dmg"
 rm -f "dist/${DMG_NAME}"
 
@@ -73,6 +78,7 @@ echo ""
 echo -e "${GREEN}${BOLD}Build abgeschlossen!${RESET}"
 echo ""
 echo "  App:  dist/NXT Scanner.app"
+echo "  ZIP:  dist/${ZIP_NAME}"
 echo "  DMG:  dist/${DMG_NAME}"
 echo ""
 echo "  Nächste Schritte:"
