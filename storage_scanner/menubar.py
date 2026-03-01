@@ -79,8 +79,9 @@ class StorageScannerApp(rumps.App):
         self.log_menu = rumps.MenuItem("Log")
         self.scan_all_item = rumps.MenuItem("Jetzt alle scannen", callback=self.scan_all)
         self.version_item = rumps.MenuItem(f"Version {__version__}")
-        self.update_item = rumps.MenuItem("Auf Updates prüfen...", callback=self._manual_update_check)
+        self.update_item = rumps.MenuItem("Auf Updates prüfen...", callback=self._on_update_click)
         self._update_info = None
+        self._update_busy = False
         self.quit_item = rumps.MenuItem("Beenden", callback=self.quit_app)
 
         self.menu = [
@@ -357,52 +358,69 @@ class StorageScannerApp(rumps.App):
     def periodic_update_check(self, _):
         threading.Thread(target=self._do_update_check, daemon=True).start()
 
-    def _manual_update_check(self, _):
-        threading.Thread(target=self._do_update_check, args=(True,), daemon=True).start()
+    def _on_update_click(self, _):
+        """Einziger Callback für den Update-Menüpunkt — entscheidet anhand State."""
+        if self._update_busy:
+            return
+        if self._update_info:
+            # Update gefunden → installieren
+            self._update_busy = True
+            version = self._update_info["version"]
+            self.update_item.title = "Herunterladen..."
+            self._log(f"Update-Install gestartet: v{version}")
+            threading.Thread(target=self._install_update_worker, args=(version,), daemon=True).start()
+        else:
+            # Kein Update → suchen
+            self._update_busy = True
+            self.update_item.title = "Suche nach Updates..."
+            threading.Thread(target=self._do_update_check, args=(True,), daemon=True).start()
 
     def _do_update_check(self, notify_if_current: bool = False):
-        info = check_for_update()
+        try:
+            self._log("Update-Check gestartet...")
+            info = check_for_update()
+            self._log(f"Update-Check Ergebnis: {info}")
+        except Exception as e:
+            self._log(f"Update-Check Fehler: {e}")
+            if notify_if_current:
+                rumps.notification("NXT Scanner", "Update-Check fehlgeschlagen", str(e)[:100])
+            self.update_item.title = "Auf Updates prüfen..."
+            self._update_busy = False
+            return
         if info:
             self._update_info = info
-            self.update_item.title = f"Update verfügbar: v{info['version']} – Jetzt installieren"
-            self.update_item.callback = self._do_install_update
+            self.update_item.title = f"Update: v{info['version']} – Jetzt installieren"
             rumps.notification(
                 "NXT Scanner Update",
                 f"Version {info['version']} verfügbar",
                 info.get("release_notes", "Neue Version verfügbar."),
             )
-        elif notify_if_current:
-            rumps.notification("NXT Scanner", "", f"Du hast die neueste Version ({__version__}).")
-
-    def _do_install_update(self, _):
-        if not self._update_info:
-            return
-        version = self._update_info["version"]
-        response = rumps.alert(
-            title="NXT Scanner Update",
-            message=f"Version {version} herunterladen und installieren?\n\nDie App wird danach automatisch neu gestartet.",
-            ok="Jetzt installieren",
-            cancel="Abbrechen",
-        )
-        if response != 1:
-            return
-        self.update_item.title = "Herunterladen..."
-        self.update_item.callback = None
-        threading.Thread(target=self._install_update_worker, args=(version,), daemon=True).start()
+        else:
+            self.update_item.title = "Auf Updates prüfen..."
+            if notify_if_current:
+                rumps.notification("NXT Scanner", "", f"Du hast die neueste Version ({__version__}).")
+        self._update_busy = False
 
     def _install_update_worker(self, version: str):
         try:
             install_update(version, on_status=self._set_update_status)
+            self._log(f"Update-Install erfolgreich: v{version}")
             self.update_item.title = "Update installiert – Neustart..."
             rumps.notification("NXT Scanner", "Update installiert", f"v{version} – App startet neu...")
-            import time
-            time.sleep(2)
-            # Non-zero Exit → launchd startet die neue Version
-            import os
-            os._exit(1)
+            import time, subprocess, os
+            # Neue App nach kurzer Verzögerung starten, dann diese beenden
+            subprocess.Popen(
+                f'sleep 3 && open "/Applications/NXT Scanner.app"',
+                shell=True,
+                start_new_session=True,
+            )
+            time.sleep(1)
+            os._exit(0)
         except Exception as e:
+            self._log(f"Update-Install Fehler: {e}")
             self.update_item.title = "Update fehlgeschlagen – Erneut versuchen"
-            self.update_item.callback = self._do_install_update
+            self._update_info = None
+            self._update_busy = False
             rumps.notification("NXT Scanner", "Update fehlgeschlagen", str(e)[:100])
 
     def _set_update_status(self, status: str):

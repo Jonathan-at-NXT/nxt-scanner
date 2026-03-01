@@ -6,8 +6,10 @@ import shutil
 import ssl
 import subprocess
 import tempfile
+import time
 import zipfile
 from pathlib import Path
+from http.client import IncompleteRead
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
@@ -33,27 +35,29 @@ def check_for_update() -> dict | None:
 
     Returns:
         Dict mit version, download_url, release_notes wenn Update verfügbar.
-        None wenn aktuelle Version aktuell ist oder Check fehlschlägt.
+        None wenn aktuelle Version aktuell ist.
+
+    Raises:
+        Exception bei Netzwerk-/API-Fehlern (nicht mehr still geschluckt).
     """
-    try:
-        req = Request(GITHUB_API_LATEST, headers={
-            "User-Agent": "NXT-Scanner-Updater",
-            "Accept": "application/vnd.github+json",
-        })
-        with urlopen(req, timeout=10, context=_SSL_CTX) as resp:
-            data = json.loads(resp.read().decode())
+    logger.info(f"Update-Check: certifi={certifi.where()}, version={__version__}")
+    req = Request(GITHUB_API_LATEST, headers={
+        "User-Agent": "NXT-Scanner-Updater",
+        "Accept": "application/vnd.github+json",
+    })
+    logger.info("Update-Check: urlopen...")
+    with urlopen(req, timeout=30, context=_SSL_CTX) as resp:
+        logger.info(f"Update-Check: Status {resp.status}")
+        data = json.loads(resp.read().decode())
 
-        tag = data.get("tag_name", "")
-        remote_version = tag.lstrip("v")
-        if _parse_version(remote_version) > _parse_version(__version__):
-            return {
-                "version": remote_version,
-                "download_url": data.get("html_url", ""),
-                "release_notes": data.get("body", "Neue Version verfügbar."),
-            }
-    except (URLError, json.JSONDecodeError, ValueError, OSError) as e:
-        logger.debug(f"Update-Check fehlgeschlagen: {e}")
-
+    tag = data.get("tag_name", "")
+    remote_version = tag.lstrip("v")
+    if _parse_version(remote_version) > _parse_version(__version__):
+        return {
+            "version": remote_version,
+            "download_url": data.get("html_url", ""),
+            "release_notes": data.get("body", "Neue Version verfügbar."),
+        }
     return None
 
 
@@ -77,23 +81,41 @@ def install_update(version: str, on_status=None) -> bool:
         tmp_path = Path(tmp_dir)
         zip_path = tmp_path / "update.zip"
 
-        # Download
+        # Download (mit Retry bei Netzwerkfehlern)
         _status(f"Herunterladen... (v{version})")
-        req = Request(zip_url, headers={"User-Agent": "NXT-Scanner-Updater"})
-        with urlopen(req, timeout=120, context=_SSL_CTX) as resp:
-            zip_path.write_bytes(resp.read())
+        last_error = None
+        for attempt in range(3):
+            try:
+                if attempt > 0:
+                    _status(f"Herunterladen... Versuch {attempt + 1}/3")
+                    time.sleep(3)
+                req = Request(zip_url, headers={"User-Agent": "NXT-Scanner-Updater"})
+                with urlopen(req, timeout=120, context=_SSL_CTX) as resp:
+                    # In Chunks lesen statt alles auf einmal
+                    with open(zip_path, "wb") as f:
+                        while True:
+                            chunk = resp.read(1024 * 1024)  # 1 MB
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                last_error = None
+                break
+            except (URLError, OSError, IncompleteRead) as e:
+                last_error = e
+                logger.info(f"Download-Versuch {attempt + 1} fehlgeschlagen: {e}")
+        if last_error:
+            raise last_error
 
-        # Entpacken
+        # Entpacken (ditto bewahrt Symlinks, zipfile nicht)
         _status("Entpacken...")
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(tmp_path)
+        subprocess.run(
+            ["ditto", "-xk", str(zip_path), str(tmp_path)],
+            capture_output=True, check=True,
+        )
 
         new_app = tmp_path / "NXT Scanner.app"
         if not new_app.exists():
             raise FileNotFoundError("NXT Scanner.app nicht im ZIP gefunden")
-
-        # Quarantine-Attribut entfernen
-        subprocess.run(["xattr", "-cr", str(new_app)], capture_output=True)
 
         # Alte App ersetzen
         _status("Installieren...")
@@ -101,7 +123,10 @@ def install_update(version: str, on_status=None) -> bool:
             shutil.rmtree(APP_INSTALL_PATH)
         shutil.copytree(new_app, APP_INSTALL_PATH, symlinks=True)
 
-        # Quarantine auch von der installierten Version entfernen
+        # Quarantine entfernen + Execute-Berechtigung sicherstellen
         subprocess.run(["xattr", "-cr", str(APP_INSTALL_PATH)], capture_output=True)
+        main_exe = APP_INSTALL_PATH / "Contents" / "MacOS" / "NXT Scanner"
+        if main_exe.exists():
+            main_exe.chmod(0o755)
 
     return True
