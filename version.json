@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
+  "version": "1.4.1",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Aggregierte Projekte-DB + Mismatch-Log. Speicherungen zeigt Einzel-Einträge, neue Projekte-DB zeigt Übersicht pro Projekt mit Typen, HDDs und Größenvergleich."
+  "release_notes": "SSL-Fix für Update-Check + Aggregierte Projekte-DB + Mismatch-Log."
 }

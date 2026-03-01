@@ -3,12 +3,15 @@
 import json
 import logging
 import shutil
+import ssl
 import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError
+
+import certifi
 
 from . import __version__
 
@@ -17,6 +20,7 @@ logger = logging.getLogger(__name__)
 GITHUB_API_LATEST = "https://api.github.com/repos/Jonathan-at-NXT/nxt-scanner/releases/latest"
 GITHUB_RELEASE_BASE = "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/download"
 APP_INSTALL_PATH = Path("/Applications/NXT Scanner.app")
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -36,7 +40,7 @@ def check_for_update() -> dict | None:
             "User-Agent": "NXT-Scanner-Updater",
             "Accept": "application/vnd.github+json",
         })
-        with urlopen(req, timeout=10) as resp:
+        with urlopen(req, timeout=10, context=_SSL_CTX) as resp:
             data = json.loads(resp.read().decode())
 
         tag = data.get("tag_name", "")
@@ -67,7 +71,7 @@ def install_update(version: str) -> bool:
 
         # Download
         req = Request(zip_url, headers={"User-Agent": "NXT-Scanner-Updater"})
-        with urlopen(req, timeout=120) as resp:
+        with urlopen(req, timeout=120, context=_SSL_CTX) as resp:
             zip_path.write_bytes(resp.read())
 
         # Entpacken
