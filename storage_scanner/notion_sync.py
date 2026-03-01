@@ -225,7 +225,6 @@ def migrate_schema(hdd_db_id: str, projects_db_id: str) -> None:
                 "Kapazität (GB)": {"number": {"format": "number"}},
                 "Belegt (GB)": {"number": {"format": "number"}},
                 "Volume UUID": {"rich_text": {}},
-                "Zuletzt genutzt von": {"select": {}},
             }
         })
     except httpx.HTTPStatusError:

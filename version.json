@@ -1,5 +1,5 @@
 {
-  "version": "1.3.1",
+  "version": "1.3.2",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Auto-Update ohne Browser, kein Gatekeeper-Dialog mehr."
+  "release_notes": "Tags bleiben erhalten, Zeitzone immer Europe/Berlin."
 }
