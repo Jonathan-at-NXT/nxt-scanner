@@ -1,5 +1,5 @@
 {
-  "version": "1.4.1",
+  "version": "1.5.0",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "SSL-Fix für Update-Check + Aggregierte Projekte-DB + Mismatch-Log."
+  "release_notes": "Log-Dashboard mit 4 Log-Typen (MISSING_BACKUP, SIZE_MISMATCH, INCOMPLETE_BACKUP, EXCESS_COPIES), Prioritäten, automatischem Backup-Status auf Projekte-DB + neues App-Icon."
 }

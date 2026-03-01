@@ -169,6 +169,15 @@ def create_aggregated_projects_database(hdd_db_id: str, speicherungen_db_id: str
             "Gesamtgröße (GB)": {"number": {"format": "number"}},
             "Übersicht": {"rich_text": {}},
             "Mismatch": {"checkbox": {}},
+            "Backup-Status": {
+                "select": {
+                    "options": [
+                        {"name": "Nicht gesichert", "color": "red"},
+                        {"name": "Teilweise", "color": "orange"},
+                        {"name": "Vollständig", "color": "green"},
+                    ]
+                }
+            },
             "Letzter Scan": {"date": {}},
         },
     })
@@ -186,7 +195,19 @@ def create_log_database(aggregated_db_id: str) -> str:
             "Typ": {
                 "select": {
                     "options": [
-                        {"name": "SIZE_MISMATCH", "color": "red"},
+                        {"name": "MISSING_BACKUP", "color": "red"},
+                        {"name": "SIZE_MISMATCH", "color": "orange"},
+                        {"name": "INCOMPLETE_BACKUP", "color": "orange"},
+                        {"name": "EXCESS_COPIES", "color": "gray"},
+                    ]
+                }
+            },
+            "Priorität": {
+                "select": {
+                    "options": [
+                        {"name": "Kritisch", "color": "red"},
+                        {"name": "Warnung", "color": "orange"},
+                        {"name": "Info", "color": "gray"},
                     ]
                 }
             },
@@ -211,6 +232,7 @@ def create_log_database(aggregated_db_id: str) -> str:
                     "options": [
                         {"name": "Open", "color": "red"},
                         {"name": "Resolved", "color": "green"},
+                        {"name": "Umgesetzt", "color": "blue"},
                     ]
                 }
             },
@@ -385,12 +407,12 @@ def ensure_databases() -> tuple[str, str, str, str]:
     config["log_db_id"] = log_db_id
     save_config(config)
 
-    migrate_schema(hdd_db_id, projects_db_id)
+    migrate_schema(hdd_db_id, projects_db_id, log_db_id, aggregated_db_id)
 
     return hdd_db_id, projects_db_id, aggregated_db_id, log_db_id
 
 
-def migrate_schema(hdd_db_id: str, projects_db_id: str) -> None:
+def migrate_schema(hdd_db_id: str, projects_db_id: str, log_db_id: str = "", aggregated_db_id: str = "") -> None:
     """Stellt sicher, dass alle Properties existieren (idempotent)."""
     try:
         api_patch(f"databases/{hdd_db_id}", {
@@ -429,6 +451,45 @@ def migrate_schema(hdd_db_id: str, projects_db_id: str) -> None:
         })
     except httpx.HTTPStatusError:
         pass
+
+    # Log: Schema-Migration (neue Typen, Priorität, Status-Option "Umgesetzt")
+    if log_db_id:
+        try:
+            api_patch(f"databases/{log_db_id}", {
+                "properties": {
+                    "Status": {"select": {"options": [
+                        {"name": "Umgesetzt", "color": "blue"},
+                    ]}},
+                    "Typ": {"select": {"options": [
+                        {"name": "MISSING_BACKUP", "color": "red"},
+                        {"name": "SIZE_MISMATCH", "color": "orange"},
+                        {"name": "INCOMPLETE_BACKUP", "color": "orange"},
+                        {"name": "EXCESS_COPIES", "color": "gray"},
+                    ]}},
+                    "Priorität": {"select": {"options": [
+                        {"name": "Kritisch", "color": "red"},
+                        {"name": "Warnung", "color": "orange"},
+                        {"name": "Info", "color": "gray"},
+                    ]}},
+                }
+            })
+        except httpx.HTTPStatusError:
+            pass
+
+    # Projekte (aggregiert): Backup-Status hinzufügen
+    if aggregated_db_id:
+        try:
+            api_patch(f"databases/{aggregated_db_id}", {
+                "properties": {
+                    "Backup-Status": {"select": {"options": [
+                        {"name": "Nicht gesichert", "color": "red"},
+                        {"name": "Teilweise", "color": "orange"},
+                        {"name": "Vollständig", "color": "green"},
+                    ]}},
+                }
+            })
+        except httpx.HTTPStatusError:
+            pass
 
 
 # ── Notion-Abfragen ────────────────────────────────────────────────
@@ -623,6 +684,104 @@ def _has_size_mismatch(entries: list[dict]) -> bool:
     return False
 
 
+def _compute_backup_status(entries: list[dict]) -> str:
+    """Berechnet den Backup-Status eines Projekts.
+
+    Returns:
+        "Nicht gesichert" — mindestens 1 Typ nur auf 1 HDD
+        "Teilweise" — alle Typen auf 2+ HDDs, aber Größen stimmen nicht überein
+        "Vollständig" — alle Typen auf 2+ HDDs, alle Größen identisch
+    """
+    by_type = defaultdict(list)
+    for e in entries:
+        if e["type"]:
+            by_type[e["type"]].append(e)
+
+    for type_entries in by_type.values():
+        unique_hdds = set(e["hdd_id"] for e in type_entries if e["hdd_id"])
+        if len(unique_hdds) < 2:
+            return "Nicht gesichert"
+
+    for type_entries in by_type.values():
+        sizes = set(e["size_gb"] for e in type_entries)
+        if len(sizes) > 1:
+            return "Teilweise"
+
+    return "Vollständig"
+
+
+def _upsert_log_entry(
+    log_db_id: str,
+    log_map: dict,
+    log_name: str,
+    log_type: str,
+    priority: str,
+    details: str,
+    hdd_names_str: str,
+    scan_date: str,
+    agg_page_id: str | None = None,
+    folder_type: str | None = None,
+    diff_gb: float | None = None,
+) -> None:
+    """Erstellt oder aktualisiert einen Log-Eintrag (gemeinsam für alle 4 Typen).
+
+    - "Umgesetzt" wird nie überschrieben
+    - Existing + Resolved → Wiedereröffnen, Erkannt am aktualisieren
+    - Existing + Open → Details aktualisieren
+    - Neu → Erstellen mit Erkannt am
+    """
+    existing = log_map.get(log_name)
+
+    if existing and existing["status"] == "Umgesetzt":
+        return
+
+    properties = {
+        "Name": {"title": [{"text": {"content": log_name}}]},
+        "Typ": {"select": {"name": log_type}},
+        "Priorität": {"select": {"name": priority}},
+        "Details": {"rich_text": [{"text": {"content": details[:2000]}}]},
+        "HDDs": {"rich_text": [{"text": {"content": hdd_names_str}}]},
+        "Status": {"select": {"name": "Open"}},
+    }
+    if scan_date:
+        properties["Letzter Scan"] = {"date": {"start": scan_date}}
+    if agg_page_id:
+        properties["Projekt"] = {"relation": [{"id": agg_page_id}]}
+    if folder_type:
+        properties["Ordnertyp"] = {"select": {"name": folder_type}}
+    if diff_gb is not None:
+        properties["Differenz (GB)"] = {"number": diff_gb}
+
+    if existing:
+        if existing["status"] == "Resolved" and scan_date:
+            properties["Erkannt am"] = {"date": {"start": scan_date}}
+        api_patch(f"pages/{existing['id']}", {"properties": properties})
+    else:
+        if scan_date:
+            properties["Erkannt am"] = {"date": {"start": scan_date}}
+        api_post("pages", {"parent": {"database_id": log_db_id}, "properties": properties})
+        print(f"  Log: {log_name}")
+
+
+def _resolve_log_entry(
+    log_map: dict,
+    log_name: str,
+    scan_date: str,
+) -> None:
+    """Setzt einen offenen Log-Eintrag auf Resolved."""
+    existing = log_map.get(log_name)
+    if not existing or existing["status"] != "Open":
+        return
+
+    resolve_props: dict = {
+        "Status": {"select": {"name": "Resolved"}},
+    }
+    if scan_date:
+        resolve_props["Letzter Scan"] = {"date": {"start": scan_date}}
+    api_patch(f"pages/{existing['id']}", {"properties": resolve_props})
+    print(f"  Log resolved: {log_name}")
+
+
 def sync_aggregated_projects(
     aggregated_db_id: str,
     projects_db_id: str,
@@ -732,8 +891,9 @@ def sync_aggregated_projects(
         if len(overview) > 2000:
             overview = overview[:1997] + "..."
 
-        # Mismatch prüfen
+        # Mismatch + Backup-Status prüfen
         has_mismatch = _has_size_mismatch(entries)
+        backup_status = _compute_backup_status(entries)
 
         properties = {
             "Name": {"title": [{"text": {"content": agg_key}}]},
@@ -745,6 +905,7 @@ def sync_aggregated_projects(
             "Gesamtgröße (GB)": {"number": total_size},
             "Übersicht": {"rich_text": [{"text": {"content": overview}}]},
             "Mismatch": {"checkbox": has_mismatch},
+            "Backup-Status": {"select": {"name": backup_status}},
         }
         if scan_date:
             properties["Letzter Scan"] = {"date": {"start": scan_date}}
@@ -775,10 +936,12 @@ def sync_log(
     project_groups: list[dict],
     scan_date: str,
 ) -> None:
-    """Erstellt/aktualisiert Log-Einträge für Größen-Mismatches.
+    """Erstellt/aktualisiert Log-Einträge für alle 4 Log-Typen.
 
-    Pro Typ mit ≥2 Kopien wird geprüft ob die Größen exakt übereinstimmen.
-    Neue Mismatches → Status "Open", gelöste → Status "Resolved".
+    - MISSING_BACKUP (Kritisch): Ordnertyp nur auf 1 HDD
+    - SIZE_MISMATCH (Warnung): Gleicher Typ, verschiedene Größen
+    - INCOMPLETE_BACKUP (Warnung): HDD hat Projekt aber nicht alle Typen
+    - EXCESS_COPIES (Info): Ordnertyp auf 3+ HDDs
     """
     # Bestehende Log-Einträge laden
     existing_logs = query_database(log_db_id)
@@ -802,6 +965,7 @@ def sync_log(
     for group in project_groups:
         agg_key = group["agg_key"]
         entries = group["entries"]
+        agg_page_id = agg_page_map.get(agg_key)
 
         # Nach Typ gruppieren
         by_type = defaultdict(list)
@@ -809,59 +973,101 @@ def sync_log(
             if e["type"]:
                 by_type[e["type"]].append(e)
 
+        # Alle Typen im Projekt + welche HDDs welche Typen haben
+        all_types = set(by_type.keys())
+        hdds_with_types: dict[str, set[str]] = defaultdict(set)
+        for e in entries:
+            if e["type"] and e["hdd_name"]:
+                hdds_with_types[e["hdd_name"]].add(e["type"])
+
+        # 1. MISSING_BACKUP — Typ nur auf 1 HDD
         for type_name, type_entries in by_type.items():
-            if len(type_entries) < 2:
+            unique_hdds = set(e["hdd_name"] for e in type_entries if e["hdd_name"])
+            log_name = f"MISSING_BACKUP: {agg_key} {type_name}"
+
+            if len(unique_hdds) < 2:
+                entry = type_entries[0]
+                size_str = f"{entry['size_gb']} GB"
+                hdd_name = next(iter(unique_hdds)) if unique_hdds else "?"
+                details = f"Nur auf {hdd_name} ({size_str})"
+                _upsert_log_entry(
+                    log_db_id, log_map, log_name,
+                    log_type="MISSING_BACKUP", priority="Kritisch",
+                    details=details, hdd_names_str=hdd_name,
+                    scan_date=scan_date, agg_page_id=agg_page_id,
+                    folder_type=type_name,
+                )
+            else:
+                _resolve_log_entry(log_map, log_name, scan_date)
+
+        # 2. SIZE_MISMATCH — Typ auf 2+ HDDs, verschiedene Größen
+        for type_name, type_entries in by_type.items():
+            unique_hdds = set(e["hdd_name"] for e in type_entries if e["hdd_name"])
+            if len(unique_hdds) < 2:
                 continue
 
             log_name = f"MISMATCH: {agg_key} {type_name}"
             sizes = [e["size_gb"] for e in type_entries]
             has_diff = len(set(sizes)) > 1
-            existing = log_map.get(log_name)
 
             if has_diff:
-                # Mismatch gefunden
                 details_parts = [f"{e['hdd_name']}: {e['size_gb']} GB" for e in type_entries]
                 details = " vs ".join(details_parts)
                 diff = round(max(sizes) - min(sizes), 2)
                 details += f" (diff: {diff} GB)"
                 hdd_names_str = ", ".join(e["hdd_name"] for e in type_entries)
-                agg_page_id = agg_page_map.get(agg_key)
+                _upsert_log_entry(
+                    log_db_id, log_map, log_name,
+                    log_type="SIZE_MISMATCH", priority="Warnung",
+                    details=details, hdd_names_str=hdd_names_str,
+                    scan_date=scan_date, agg_page_id=agg_page_id,
+                    folder_type=type_name, diff_gb=diff,
+                )
+            else:
+                _resolve_log_entry(log_map, log_name, scan_date)
 
-                properties = {
-                    "Name": {"title": [{"text": {"content": log_name}}]},
-                    "Typ": {"select": {"name": "SIZE_MISMATCH"}},
-                    "Ordnertyp": {"select": {"name": type_name}},
-                    "Details": {"rich_text": [{"text": {"content": details}}]},
-                    "HDDs": {"rich_text": [{"text": {"content": hdd_names_str}}]},
-                    "Differenz (GB)": {"number": diff},
-                    "Status": {"select": {"name": "Open"}},
-                }
-                if scan_date:
-                    properties["Letzter Scan"] = {"date": {"start": scan_date}}
-                if agg_page_id:
-                    properties["Projekt"] = {"relation": [{"id": agg_page_id}]}
+        # 3. INCOMPLETE_BACKUP — HDD hat Projekt aber nicht alle Typen
+        for hdd_name, hdd_types in hdds_with_types.items():
+            log_name = f"INCOMPLETE: {agg_key} {hdd_name}"
+            missing_types = all_types - hdd_types
 
-                if existing:
-                    # Wiedereröffnet (Resolved → Open): Erkannt am aktualisieren
-                    if existing["status"] == "Resolved" and scan_date:
-                        properties["Erkannt am"] = {"date": {"start": scan_date}}
-                    api_patch(f"pages/{existing['id']}", {"properties": properties})
-                else:
-                    # Neuer Mismatch
-                    if scan_date:
-                        properties["Erkannt am"] = {"date": {"start": scan_date}}
-                    api_post("pages", {"parent": {"database_id": log_db_id}, "properties": properties})
-                    print(f"  Log: {log_name}")
+            if missing_types:
+                # Größen der fehlenden Typen von anderen HDDs sammeln
+                missing_parts = []
+                for mt in sorted(missing_types):
+                    sizes_for_type = [e["size_gb"] for e in by_type[mt]]
+                    avg_size = round(sum(sizes_for_type) / len(sizes_for_type), 1)
+                    missing_parts.append(f"{mt} ({avg_size} GB)")
+                details = "Fehlt: " + ", ".join(missing_parts)
+                _upsert_log_entry(
+                    log_db_id, log_map, log_name,
+                    log_type="INCOMPLETE_BACKUP", priority="Warnung",
+                    details=details, hdd_names_str=hdd_name,
+                    scan_date=scan_date, agg_page_id=agg_page_id,
+                )
+            else:
+                _resolve_log_entry(log_map, log_name, scan_date)
 
-            elif existing and existing["status"] == "Open":
-                # Größen stimmen wieder überein → Resolved
-                resolve_props = {
-                    "Status": {"select": {"name": "Resolved"}},
-                }
-                if scan_date:
-                    resolve_props["Letzter Scan"] = {"date": {"start": scan_date}}
-                api_patch(f"pages/{existing['id']}", {"properties": resolve_props})
-                print(f"  Log resolved: {log_name}")
+        # 4. EXCESS_COPIES — Typ auf 3+ HDDs
+        for type_name, type_entries in by_type.items():
+            unique_hdds = sorted(set(e["hdd_name"] for e in type_entries if e["hdd_name"]))
+            log_name = f"EXCESS: {agg_key} {type_name}"
+
+            if len(unique_hdds) >= 3:
+                copies_parts = []
+                for e in type_entries:
+                    copies_parts.append(f"{e['hdd_name']} ({e['size_gb']} GB)")
+                details = f"{len(unique_hdds)} Kopien: " + ", ".join(copies_parts)
+                hdd_names_str = ", ".join(unique_hdds)
+                _upsert_log_entry(
+                    log_db_id, log_map, log_name,
+                    log_type="EXCESS_COPIES", priority="Info",
+                    details=details, hdd_names_str=hdd_names_str,
+                    scan_date=scan_date, agg_page_id=agg_page_id,
+                    folder_type=type_name,
+                )
+            else:
+                _resolve_log_entry(log_map, log_name, scan_date)
 
 
 # ── Main ────────────────────────────────────────────────────────────
