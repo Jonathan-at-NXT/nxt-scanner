@@ -366,7 +366,7 @@ class StorageScannerApp(rumps.App):
             # Update gefunden → installieren
             self._update_busy = True
             version = self._update_info["version"]
-            self.update_item.title = "Herunterladen..."
+            self.update_item.title = "Wird heruntergeladen..."
             self._log(f"Update-Install gestartet: v{version}")
             threading.Thread(target=self._install_update_worker, args=(version,), daemon=True).start()
         else:

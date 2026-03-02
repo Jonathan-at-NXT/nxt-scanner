@@ -82,12 +82,12 @@ def install_update(version: str, on_status=None) -> bool:
         zip_path = tmp_path / "update.zip"
 
         # Download (mit Retry bei Netzwerkfehlern)
-        _status(f"Herunterladen... (v{version})")
+        _status(f"Wird heruntergeladen... (v{version})")
         last_error = None
         for attempt in range(3):
             try:
                 if attempt > 0:
-                    _status(f"Herunterladen... Versuch {attempt + 1}/3")
+                    _status(f"Wird heruntergeladen... Versuch {attempt + 1}/3")
                     time.sleep(3)
                 req = Request(zip_url, headers={"User-Agent": "NXT-Scanner-Updater"})
                 with urlopen(req, timeout=120, context=_SSL_CTX) as resp:

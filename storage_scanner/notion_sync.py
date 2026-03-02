@@ -453,6 +453,7 @@ def migrate_schema(hdd_db_id: str, projects_db_id: str, log_db_id: str = "", agg
         pass
 
     # Log: Schema-Migration (neue Typen, Priorität, Status-Option "Umgesetzt")
+    # Separate Calls nötig: Notion lehnt Farb-Änderungen bestehender Optionen ab.
     if log_db_id:
         try:
             api_patch(f"databases/{log_db_id}", {
@@ -460,16 +461,22 @@ def migrate_schema(hdd_db_id: str, projects_db_id: str, log_db_id: str = "", agg
                     "Status": {"select": {"options": [
                         {"name": "Umgesetzt", "color": "blue"},
                     ]}},
-                    "Typ": {"select": {"options": [
-                        {"name": "MISSING_BACKUP", "color": "red"},
-                        {"name": "SIZE_MISMATCH", "color": "orange"},
-                        {"name": "INCOMPLETE_BACKUP", "color": "orange"},
-                        {"name": "EXCESS_COPIES", "color": "gray"},
-                    ]}},
                     "Priorität": {"select": {"options": [
                         {"name": "Kritisch", "color": "red"},
                         {"name": "Warnung", "color": "orange"},
                         {"name": "Info", "color": "gray"},
+                    ]}},
+                }
+            })
+        except httpx.HTTPStatusError:
+            pass
+        try:
+            api_patch(f"databases/{log_db_id}", {
+                "properties": {
+                    "Typ": {"select": {"options": [
+                        {"name": "MISSING_BACKUP", "color": "red"},
+                        {"name": "INCOMPLETE_BACKUP", "color": "orange"},
+                        {"name": "EXCESS_COPIES", "color": "gray"},
                     ]}},
                 }
             })
