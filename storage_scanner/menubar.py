@@ -78,6 +78,8 @@ class StorageScannerApp(rumps.App):
         self.volumes_menu = rumps.MenuItem("Volumes")
         self.log_menu = rumps.MenuItem("Log")
         self.scan_all_item = rumps.MenuItem("Jetzt alle scannen", callback=self.scan_all)
+        self.analysis_item = rumps.MenuItem("Auswertung starten", callback=self.start_analysis)
+        self._analysis_busy = False
         self.version_item = rumps.MenuItem(f"Version {__version__}")
         self.update_item = rumps.MenuItem("Auf Updates prüfen...", callback=self._on_update_click)
         self._update_info = None
@@ -96,6 +98,7 @@ class StorageScannerApp(rumps.App):
             self.log_menu,
             None,
             self.scan_all_item,
+            self.analysis_item,
             None,
             self.version_item,
             self.update_item,
@@ -351,6 +354,28 @@ class StorageScannerApp(rumps.App):
             return
         for vol in volumes:
             self.enqueue(vol)
+
+    # ── Auswertung ─────────────────────────────────────────────────
+
+    def start_analysis(self, _):
+        if self._analysis_busy:
+            return
+        self._analysis_busy = True
+        self.analysis_item.title = "Auswertung läuft..."
+        threading.Thread(target=self._do_analysis, daemon=True).start()
+
+    def _do_analysis(self):
+        from .notion_sync import run_analysis
+        try:
+            run_analysis()
+            self._log("Auswertung abgeschlossen")
+            rumps.notification("NXT Storage Scanner", "Auswertung fertig", "Projekte + Log aktualisiert")
+        except Exception as e:
+            self._log(f"FEHLER bei Auswertung: {str(e).strip()[:200]}")
+            rumps.notification("NXT Storage Scanner", "Auswertung fehlgeschlagen", str(e)[:100])
+        finally:
+            self.analysis_item.title = "Auswertung starten"
+            self._analysis_busy = False
 
     # ── Update-Check ──────────────────────────────────────────────
 

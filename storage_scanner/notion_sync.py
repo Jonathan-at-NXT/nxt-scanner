@@ -1150,9 +1150,22 @@ def run_sync(report_path: str) -> None:
     hdd_page_id = sync_hdd(hdd_db_id, report, disk_info, user_name)
     sync_projects(projects_db_id, report, hdd_page_id, scan_date)
 
-    # Aggregation + Mismatch-Log
+
+def run_analysis() -> None:
+    """Führt nur die Aggregation + Mismatch-Log-Analyse aus (ohne Scan).
+
+    Liest alle Daten aus den bestehenden Notion-Datenbanken und aktualisiert
+    die Projekte-Übersicht sowie das Log. Wird manuell über das Menü ausgelöst.
+    """
+    from datetime import date
+
+    hdd_db_id, projects_db_id, aggregated_db_id, log_db_id = ensure_databases()
+    scan_date = date.today().isoformat()
+
     project_groups = sync_aggregated_projects(aggregated_db_id, projects_db_id, hdd_db_id, scan_date)
     sync_log(log_db_id, aggregated_db_id, project_groups, scan_date)
+
+    print("\nAuswertung abgeschlossen!")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 {
-  "version": "1.5.1",
+  "version": "1.6.0",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Bugfixes: Robuster Auto-Updater, Schema-Migration Fix, Download mit Retry."
+  "release_notes": "Scan und Auswertung getrennt: Scan bleibt schnell (nur Datenträger + Speicherungen), Auswertung (Aggregation + Log) manuell über Menü."
 }
