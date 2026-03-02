@@ -1,5 +1,5 @@
 {
-  "version": "1.6.0",
+  "version": "1.6.1",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Scan und Auswertung getrennt: Scan bleibt schnell (nur Datenträger + Speicherungen), Auswertung (Aggregation + Log) manuell über Menü."
+  "release_notes": "Bugfix: Menubar-Icon wird jetzt zuverlässig angezeigt (eager loading statt lazy)."
 }

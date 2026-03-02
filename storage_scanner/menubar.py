@@ -56,7 +56,18 @@ def save_config(config: dict) -> None:
 class StorageScannerApp(rumps.App):
     def __init__(self):
         icon_path = get_resource_path("menubar_iconTemplate.png")
-        super().__init__("", icon=str(icon_path), template=True, quit_button=None)
+        super().__init__("NXT", icon=str(icon_path), template=True, quit_button=None)
+
+        # rumps uses lazy initByReferencingFile_ which can silently fail.
+        # Re-load eagerly so the icon is guaranteed to be in memory.
+        from AppKit import NSImage as _NSImage
+        image = _NSImage.alloc().initWithContentsOfFile_(str(icon_path))
+        if image:
+            image.setSize_((22, 22))
+            image.setTemplate_(True)
+            self._icon_nsimage = image
+            self.title = ""  # icon loaded → hide text fallback
+        self._has_icon = image is not None
 
         self._queue = queue.Queue()
         self._current_scan = None
@@ -223,7 +234,7 @@ class StorageScannerApp(rumps.App):
             self.title = " ⟳"
         else:
             self.status_item.title = f"  {len(volumes)} Datenträger verbunden"
-            self.title = ""
+            self.title = "" if self._has_icon else "NXT"
 
         # Warteschlange
         for key in list(self.queue_item):
