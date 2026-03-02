@@ -1,5 +1,5 @@
 {
-  "version": "1.5.0",
+  "version": "1.5.1",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Log-Dashboard mit 4 Log-Typen (MISSING_BACKUP, SIZE_MISMATCH, INCOMPLETE_BACKUP, EXCESS_COPIES), Prioritäten, automatischem Backup-Status auf Projekte-DB + neues App-Icon."
+  "release_notes": "Bugfixes: Robuster Auto-Updater, Schema-Migration Fix, Download mit Retry."
 }
