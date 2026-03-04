@@ -83,6 +83,7 @@ class StorageScannerApp(rumps.App):
             f"Angemeldet als: {self._user_name}" if self._user_name else "Kein Name gesetzt",
             callback=self.change_name,
         )
+        self.notion_item = rumps.MenuItem("Notion Einstellungen...", callback=self.change_notion_settings)
         self.status_item = rumps.MenuItem("Status")
         self.queue_item = rumps.MenuItem("Warteschlange")
         self.last_scan_item = rumps.MenuItem("Letzter Sync: –")
@@ -99,6 +100,7 @@ class StorageScannerApp(rumps.App):
 
         self.menu = [
             self.name_item,
+            self.notion_item,
             None,
             self.status_item,
             self.queue_item,
@@ -137,6 +139,65 @@ class StorageScannerApp(rumps.App):
             config["user_name"] = self._user_name
             save_config(config)
             self.name_item.title = f"Angemeldet als: {self._user_name}"
+
+    # ── Notion Einstellungen ────────────────────────────────────────
+
+    def change_notion_settings(self, _):
+        config = load_config()
+
+        # Dialog 1: Notion Token
+        response = rumps.Window(
+            message="Notion Integration Token:",
+            title="Notion Einstellungen (1/2)",
+            default_text=config.get("notion_token", ""),
+            ok="Weiter",
+            cancel="Abbrechen",
+            dimensions=(400, 24),
+        ).run()
+        if not response.clicked:
+            return
+        new_token = response.text.strip()
+
+        # Dialog 2: Parent Page URL/ID
+        response = rumps.Window(
+            message="Notion Page URL oder ID:\n"
+                    "(Die Seite unter der die Datenbanken erstellt werden.\n"
+                    "Ganze URL oder nur die ID – beides funktioniert.)",
+            title="Notion Einstellungen (2/2)",
+            default_text=config.get("notion_parent_page_id", ""),
+            ok="Speichern",
+            cancel="Abbrechen",
+            dimensions=(400, 24),
+        ).run()
+        if not response.clicked:
+            return
+        raw_page = response.text.strip()
+
+        if not new_token or not raw_page:
+            rumps.notification("NXT Storage Scanner", "", "Token und Page ID dürfen nicht leer sein.")
+            return
+
+        # ID aus URL extrahieren: letzter 32-Zeichen-Hex-Block
+        match = re.search(r"([a-f0-9]{32})(?:[?#]|$)", raw_page)
+        new_page_id = match.group(1) if match else raw_page
+
+        token_changed = new_token != config.get("notion_token", "")
+        page_changed = new_page_id != config.get("notion_parent_page_id", "")
+
+        if not token_changed and not page_changed:
+            rumps.notification("NXT Storage Scanner", "", "Keine Änderungen vorgenommen.")
+            return
+
+        config["notion_token"] = new_token
+        config["notion_parent_page_id"] = new_page_id
+
+        # Bei Änderung alte DB-IDs entfernen, damit sie unter der neuen Page neu erstellt werden
+        for key in ("hdd_db_id", "projects_db_id", "aggregated_projects_db_id", "log_db_id", "db_title_migrated"):
+            config.pop(key, None)
+
+        save_config(config)
+        rumps.notification("NXT Storage Scanner", "Notion Einstellungen gespeichert",
+                           "Datenbanken werden beim nächsten Scan neu zugeordnet.")
 
     # ── Daten ───────────────────────────────────────────────────────
 
