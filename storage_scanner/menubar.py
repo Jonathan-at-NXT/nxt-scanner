@@ -75,6 +75,7 @@ class StorageScannerApp(rumps.App):
         self._scan_times = self._load_scan_times()
         config = load_config()
         self._user_name = config.get("user_name", "")
+        self._admin_mode = config.get("admin_mode", False) is True
         self._hidden_volumes: set[str] = set(config.get("hidden_volumes", []))
         self._worker = threading.Thread(target=self._process_queue, daemon=True)
         self._worker.start()
@@ -92,13 +93,15 @@ class StorageScannerApp(rumps.App):
         self.scan_all_item = rumps.MenuItem("Jetzt alle scannen", callback=self.scan_all)
         self.analysis_item = rumps.MenuItem("Auswertung starten", callback=self.start_analysis)
         self._analysis_busy = False
+        self.fullfilment_item = rumps.MenuItem("Fullfilment Sync", callback=self.start_fullfilment_sync)
+        self._fullfilment_busy = False
         self.version_item = rumps.MenuItem(f"Version {__version__}")
         self.update_item = rumps.MenuItem("Auf Updates prüfen...", callback=self._on_update_click)
         self._update_info = None
         self._update_busy = False
         self.quit_item = rumps.MenuItem("Beenden", callback=self.quit_app)
 
-        self.menu = [
+        menu_items = [
             self.name_item,
             self.notion_item,
             None,
@@ -111,13 +114,18 @@ class StorageScannerApp(rumps.App):
             self.log_menu,
             None,
             self.scan_all_item,
-            self.analysis_item,
+        ]
+        if self._admin_mode:
+            menu_items.append(self.analysis_item)
+            menu_items.append(self.fullfilment_item)
+        menu_items.extend([
             None,
             self.version_item,
             self.update_item,
             None,
             self.quit_item,
-        ]
+        ])
+        self.menu = menu_items
 
         # Initiale Volumes als bekannt setzen (kein sofortiger Scan beim App-Start)
         self._known_volumes = set(self.get_mounted_volumes())
@@ -448,6 +456,33 @@ class StorageScannerApp(rumps.App):
         finally:
             self.analysis_item.title = "Auswertung starten"
             self._analysis_busy = False
+
+    # ── Fullfilment Sync (Admin) ──────────────────────────────────
+
+    def start_fullfilment_sync(self, _):
+        if self._fullfilment_busy:
+            return
+        self._fullfilment_busy = True
+        self.fullfilment_item.title = "Fullfilment Sync läuft..."
+        threading.Thread(target=self._do_fullfilment_sync, daemon=True).start()
+
+    def _do_fullfilment_sync(self):
+        from .admin import run_fullfilment_sync
+        try:
+            stats = run_fullfilment_sync()
+            updated_total = stats['updated_fullfilment'] + stats['updated_projekte']
+            self._log(f"Fullfilment Sync: {stats['matched']}/{stats['total_fullfilment']} zugeordnet, {updated_total} aktualisiert")
+            rumps.notification(
+                "NXT Storage Scanner",
+                "Fullfilment Sync fertig",
+                f"{stats['matched']} von {stats['total_fullfilment']} Projekten zugeordnet, {updated_total} aktualisiert",
+            )
+        except Exception as e:
+            self._log(f"FEHLER bei Fullfilment Sync: {str(e).strip()[:200]}")
+            rumps.notification("NXT Storage Scanner", "Fullfilment Sync fehlgeschlagen", str(e)[:100])
+        finally:
+            self.fullfilment_item.title = "Fullfilment Sync"
+            self._fullfilment_busy = False
 
     # ── Update-Check ──────────────────────────────────────────────
 

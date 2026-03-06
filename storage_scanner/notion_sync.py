@@ -42,19 +42,19 @@ def _get_parent_page_id() -> str:
 # ── API-Hilfsfunktionen ────────────────────────────────────────────
 
 def api_post(endpoint: str, body: dict) -> dict:
-    resp = httpx.post(f"{API}/{endpoint}", headers=_get_headers(), json=body, timeout=30)
+    resp = httpx.post(f"{API}/{endpoint}", headers=_get_headers(), json=body, timeout=60)
     resp.raise_for_status()
     return resp.json()
 
 
 def api_patch(endpoint: str, body: dict) -> dict:
-    resp = httpx.patch(f"{API}/{endpoint}", headers=_get_headers(), json=body, timeout=30)
+    resp = httpx.patch(f"{API}/{endpoint}", headers=_get_headers(), json=body, timeout=60)
     resp.raise_for_status()
     return resp.json()
 
 
 def api_get(endpoint: str) -> dict:
-    resp = httpx.get(f"{API}/{endpoint}", headers=_get_headers(), timeout=30)
+    resp = httpx.get(f"{API}/{endpoint}", headers=_get_headers(), timeout=60)
     resp.raise_for_status()
     return resp.json()
 

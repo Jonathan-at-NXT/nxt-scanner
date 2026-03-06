@@ -27,6 +27,7 @@ a = Analysis(
         'storage_scanner.utils',
         'storage_scanner.paths',
         'storage_scanner.updater',
+        'storage_scanner.admin',
         # rumps
         'rumps',
         # PyObjC
