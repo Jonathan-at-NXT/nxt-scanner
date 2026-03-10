@@ -1,7 +1,7 @@
 """Admin-only Features – Fullfilment Sync.
 
 Matcht Projekte aus der Scanner-Projekte-DB (aggregiert) gegen die Fullfilment-DB
-und schreibt die zugehörigen Datenträger-Namen als Property zurück.
+und verlinkt die zugehörigen Datenträger als Relation.
 Setzt außerdem eine "Fullfilment"-Checkbox in der Projekte-DB.
 Nutzt eine In-Memory-SQLite-DB für schnelles Matching.
 """
@@ -48,7 +48,7 @@ def run_fullfilment_sync() -> dict:
         raise ValueError("aggregated_projects_db_id oder hdd_db_id nicht in Config gesetzt")
 
     # 1. Properties sicherstellen
-    _ensure_fullfilment_property(fullfilment_db_id)
+    _ensure_fullfilment_property(fullfilment_db_id, datentraeger_db_id)
     _ensure_projekte_checkbox(aggregated_db_id)
 
     # 2. Daten aus Notion ziehen
@@ -66,8 +66,8 @@ def run_fullfilment_sync() -> dict:
     matches = _match_in_sqlite(projekte, fullfilment_entries)
     matched_project_names = {m["project_name"] for m in matches}
 
-    # 4. Fullfilment-DB: Datenträger-Namen schreiben
-    print(f"  Fullfilment Sync: {len(matches)} Matches, schreibe Datenträger...")
+    # 4. Fullfilment-DB: Datenträger verlinken
+    print(f"  Fullfilment Sync: {len(matches)} Matches, verlinke Datenträger...")
     updated_ff = _write_matches_to_fullfilment(matches)
 
     # 5. Projekte-DB: Checkbox setzen/entfernen
@@ -83,16 +83,36 @@ def run_fullfilment_sync() -> dict:
     }
 
 
-def _ensure_fullfilment_property(db_id: str) -> None:
-    """Erstellt 'Datenträger' rich_text Property in Fullfilment-DB falls nicht vorhanden."""
+def _ensure_fullfilment_property(db_id: str, hdd_db_id: str) -> None:
+    """Erstellt 'Datenträger' Relation in Fullfilment-DB falls nicht vorhanden.
+
+    Migriert bestehende rich_text-Property zu Relation falls nötig.
+    """
     db_info = api_get(f"databases/{db_id}")
-    if "Datenträger" not in db_info.get("properties", {}):
+    props = db_info.get("properties", {})
+    dt_prop = props.get("Datenträger")
+
+    if not dt_prop:
+        # Neu erstellen als Relation
         api_patch(f"databases/{db_id}", {
             "properties": {
-                "Datenträger": {"rich_text": {}},
+                "Datenträger": {
+                    "relation": {"database_id": hdd_db_id, "type": "single_property", "single_property": {}},
+                },
             }
         })
-        print("  Fullfilment DB: 'Datenträger' Property erstellt")
+        print("  Fullfilment DB: 'Datenträger' Relation erstellt")
+    elif dt_prop.get("type") == "rich_text":
+        # Migration: rich_text → Relation (alte Property löschen, neue erstellen)
+        api_patch(f"databases/{db_id}", {"properties": {"Datenträger": None}})
+        api_patch(f"databases/{db_id}", {
+            "properties": {
+                "Datenträger": {
+                    "relation": {"database_id": hdd_db_id, "type": "single_property", "single_property": {}},
+                },
+            }
+        })
+        print("  Fullfilment DB: 'Datenträger' von Text zu Relation migriert")
 
 
 def _ensure_projekte_checkbox(db_id: str) -> None:
@@ -112,14 +132,14 @@ def _pull_datentraeger_names(datentraeger_db_id: str) -> dict[str, str]:
     pages = query_database(datentraeger_db_id)
     dt_map = {}
     for page in pages:
-        title = page["properties"]["Name"]["title"]
+        title = page["properties"].get("Name", {}).get("title", [])
         if title:
             dt_map[page["id"]] = title[0]["plain_text"]
     return dt_map
 
 
 def _pull_projekte(aggregated_db_id: str, dt_map: dict[str, str]) -> list[dict]:
-    """Lädt alle Projekte mit page_id, Projektname, Datenträger und aktuellem Checkbox-Wert."""
+    """Lädt alle Projekte mit page_id, Projektname, Datenträger-IDs und aktuellem Checkbox-Wert."""
     pages = query_database(aggregated_db_id)
 
     results = []
@@ -131,9 +151,10 @@ def _pull_projekte(aggregated_db_id: str, dt_map: dict[str, str]) -> list[dict]:
         if not project_name:
             continue
 
-        # HDDs-Relation → Datenträger-Namen auflösen
-        hdds_rel = props.get("HDDs", {}).get("relation", [])
-        dt_names = sorted(dt_map.get(rel["id"], "") for rel in hdds_rel)
+        # Datenträger-Relation auflösen (Property heißt "Datenträger", Fallback auf "HDDs")
+        dt_rel = props.get("Datenträger", props.get("HDDs", {})).get("relation", [])
+        dt_ids = [rel["id"] for rel in dt_rel]
+        dt_names = sorted(dt_map.get(rid, "") for rid in dt_ids)
         dt_names = [n for n in dt_names if n]
 
         # Aktueller Checkbox-Wert
@@ -142,6 +163,7 @@ def _pull_projekte(aggregated_db_id: str, dt_map: dict[str, str]) -> list[dict]:
         results.append({
             "page_id": page["id"],
             "project_name": project_name,
+            "datentraeger_ids": dt_ids,
             "datentraeger_str": ", ".join(dt_names) if dt_names else "",
             "has_fullfilment": has_fullfilment,
         })
@@ -162,13 +184,14 @@ def _pull_fullfilment(fullfilment_db_id: str) -> list[dict]:
         if not title:
             continue
 
-        dt_parts = props.get("Datenträger", {}).get("rich_text", [])
-        existing_dt = dt_parts[0]["plain_text"] if dt_parts else ""
+        # Bestehende Datenträger-Relation lesen
+        dt_rel = props.get("Datenträger", {}).get("relation", [])
+        existing_dt_ids = sorted(r["id"] for r in dt_rel)
 
         results.append({
             "page_id": page["id"],
             "title": title,
-            "existing_datentraeger": existing_dt,
+            "existing_datentraeger_ids": existing_dt_ids,
         })
 
     return results
@@ -179,52 +202,57 @@ def _match_in_sqlite(
     fullfilment_entries: list[dict],
 ) -> list[dict]:
     """Exaktes Matching per In-Memory-SQLite (case-insensitive)."""
+    # Lookup für Datenträger-IDs nach Projektname
+    proj_dt_ids = {}
+    for e in projekte:
+        proj_dt_ids.setdefault(e["project_name"].upper(), e["datentraeger_ids"])
+
     conn = sqlite3.connect(":memory:")
     cur = conn.cursor()
 
     cur.execute("""
         CREATE TABLE projekte (
-            project_name TEXT COLLATE NOCASE,
-            datentraeger_str TEXT
+            project_name TEXT COLLATE NOCASE
         )
     """)
     cur.execute("""
         CREATE TABLE fullfilment (
             page_id TEXT,
-            title TEXT COLLATE NOCASE,
-            existing_datentraeger TEXT
+            title TEXT COLLATE NOCASE
         )
     """)
 
     cur.executemany(
-        "INSERT INTO projekte VALUES (?, ?)",
-        [(e["project_name"], e["datentraeger_str"]) for e in projekte],
+        "INSERT INTO projekte VALUES (?)",
+        [(e["project_name"],) for e in projekte],
     )
     cur.executemany(
-        "INSERT INTO fullfilment VALUES (?, ?, ?)",
-        [(e["page_id"], e["title"], e["existing_datentraeger"]) for e in fullfilment_entries],
+        "INSERT INTO fullfilment VALUES (?, ?)",
+        [(e["page_id"], e["title"]) for e in fullfilment_entries],
     )
 
     cur.execute("""
-        SELECT
+        SELECT DISTINCT
             f.page_id,
             f.title,
-            p.datentraeger_str,
-            f.existing_datentraeger,
             p.project_name
         FROM fullfilment f
         INNER JOIN projekte p
             ON f.title = p.project_name
     """)
 
+    # Lookup für bestehende Datenträger-IDs in Fullfilment
+    ff_existing = {e["page_id"]: e["existing_datentraeger_ids"] for e in fullfilment_entries}
+
     matches = []
     for row in cur.fetchall():
+        project_name = row[2]
         matches.append({
             "page_id": row[0],
             "title": row[1],
-            "datentraeger_str": row[2],
-            "existing_datentraeger": row[3] or "",
-            "project_name": row[4],
+            "project_name": project_name,
+            "datentraeger_ids": proj_dt_ids.get(project_name.upper(), []),
+            "existing_datentraeger_ids": ff_existing.get(row[0], []),
         })
 
     conn.close()
@@ -232,22 +260,26 @@ def _match_in_sqlite(
 
 
 def _write_matches_to_fullfilment(matches: list[dict]) -> int:
-    """Schreibt Datenträger-Namen in Fullfilment-DB. Überspringt unveränderte."""
+    """Verlinkt Datenträger in Fullfilment-DB. Überspringt unveränderte."""
     updated = 0
     for match in matches:
-        new_value = match["datentraeger_str"]
-        if new_value == match["existing_datentraeger"]:
+        new_ids = sorted(match["datentraeger_ids"])
+        existing_ids = sorted(match["existing_datentraeger_ids"])
+        if new_ids == existing_ids:
+            continue
+
+        if not new_ids:
             continue
 
         _api_patch_retry(f"pages/{match['page_id']}", {
             "properties": {
                 "Datenträger": {
-                    "rich_text": [{"text": {"content": new_value}}],
+                    "relation": [{"id": hid} for hid in new_ids],
                 },
             },
         })
         updated += 1
-        print(f"  {match['title']} -> {new_value}")
+        print(f"  {match['title']} -> {len(new_ids)} Datenträger verlinkt")
 
     return updated
 

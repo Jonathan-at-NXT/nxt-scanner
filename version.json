@@ -1,5 +1,5 @@
 {
-  "version": "1.6.1",
+  "version": "1.7.0",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Bugfix: Menubar-Icon wird jetzt zuverlässig angezeigt (eager loading statt lazy)."
+  "release_notes": "Saubere Trennung Admin/User, Datenträger-Relationen statt Text, Sicherungen-Zähler statt Backup-Status."
 }

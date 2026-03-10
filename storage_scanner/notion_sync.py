@@ -164,20 +164,12 @@ def create_aggregated_projects_database(hdd_db_id: str, speicherungen_db_id: str
                     ]
                 }
             },
-            "HDDs": {"relation": {"database_id": hdd_db_id, "type": "single_property", "single_property": {}}},
+            "Datenträger": {"relation": {"database_id": hdd_db_id, "type": "single_property", "single_property": {}}},
             "Speicherungen": {"relation": {"database_id": speicherungen_db_id, "type": "single_property", "single_property": {}}},
             "Gesamtgröße (GB)": {"number": {"format": "number"}},
+            "Sicherungen": {"number": {"format": "number"}},
             "Übersicht": {"rich_text": {}},
             "Mismatch": {"checkbox": {}},
-            "Backup-Status": {
-                "select": {
-                    "options": [
-                        {"name": "Nicht gesichert", "color": "red"},
-                        {"name": "Teilweise", "color": "orange"},
-                        {"name": "Vollständig", "color": "green"},
-                    ]
-                }
-            },
             "Letzter Scan": {"date": {}},
         },
     })
@@ -185,60 +177,64 @@ def create_aggregated_projects_database(hdd_db_id: str, speicherungen_db_id: str
     return db["id"]
 
 
-def create_log_database(aggregated_db_id: str) -> str:
+def create_log_database(aggregated_db_id: str, hdd_db_id: str = "") -> str:
     """Erstellt die Log-Datenbank für Mismatch-Warnungen."""
+    properties: dict = {
+        "Name": {"title": {}},
+        "Typ": {
+            "select": {
+                "options": [
+                    {"name": "MISSING_BACKUP", "color": "red"},
+                    {"name": "SIZE_MISMATCH", "color": "orange"},
+                    {"name": "INCOMPLETE_BACKUP", "color": "orange"},
+                    {"name": "EXCESS_COPIES", "color": "gray"},
+                ]
+            }
+        },
+        "Priorität": {
+            "select": {
+                "options": [
+                    {"name": "Kritisch", "color": "red"},
+                    {"name": "Warnung", "color": "orange"},
+                    {"name": "Info", "color": "gray"},
+                ]
+            }
+        },
+        "Projekt": {"relation": {"database_id": aggregated_db_id, "type": "single_property", "single_property": {}}},
+        "Ordnertyp": {
+            "select": {
+                "options": [
+                    {"name": "FOOTAGE", "color": "blue"},
+                    {"name": "PHOTOS", "color": "green"},
+                    {"name": "WORKING", "color": "orange"},
+                    {"name": "BTS", "color": "yellow"},
+                    {"name": "PROJECT", "color": "purple"},
+                    {"name": "PROXIES", "color": "pink"},
+                ]
+            }
+        },
+        "Details": {"rich_text": {}},
+        "Differenz (GB)": {"number": {"format": "number"}},
+        "Status": {
+            "select": {
+                "options": [
+                    {"name": "Open", "color": "red"},
+                    {"name": "Resolved", "color": "green"},
+                    {"name": "Umgesetzt", "color": "blue"},
+                ]
+            }
+        },
+        "Erkannt am": {"date": {}},
+        "Letzter Scan": {"date": {}},
+    }
+    if hdd_db_id:
+        properties["Datenträger"] = {
+            "relation": {"database_id": hdd_db_id, "type": "single_property", "single_property": {}}
+        }
     db = api_post("databases", {
         "parent": {"type": "page_id", "page_id": _get_parent_page_id()},
         "title": [{"type": "text", "text": {"content": "Log"}}],
-        "properties": {
-            "Name": {"title": {}},
-            "Typ": {
-                "select": {
-                    "options": [
-                        {"name": "MISSING_BACKUP", "color": "red"},
-                        {"name": "SIZE_MISMATCH", "color": "orange"},
-                        {"name": "INCOMPLETE_BACKUP", "color": "orange"},
-                        {"name": "EXCESS_COPIES", "color": "gray"},
-                    ]
-                }
-            },
-            "Priorität": {
-                "select": {
-                    "options": [
-                        {"name": "Kritisch", "color": "red"},
-                        {"name": "Warnung", "color": "orange"},
-                        {"name": "Info", "color": "gray"},
-                    ]
-                }
-            },
-            "Projekt": {"relation": {"database_id": aggregated_db_id, "type": "single_property", "single_property": {}}},
-            "Ordnertyp": {
-                "select": {
-                    "options": [
-                        {"name": "FOOTAGE", "color": "blue"},
-                        {"name": "PHOTOS", "color": "green"},
-                        {"name": "WORKING", "color": "orange"},
-                        {"name": "BTS", "color": "yellow"},
-                        {"name": "PROJECT", "color": "purple"},
-                        {"name": "PROXIES", "color": "pink"},
-                    ]
-                }
-            },
-            "Details": {"rich_text": {}},
-            "HDDs": {"rich_text": {}},
-            "Differenz (GB)": {"number": {"format": "number"}},
-            "Status": {
-                "select": {
-                    "options": [
-                        {"name": "Open", "color": "red"},
-                        {"name": "Resolved", "color": "green"},
-                        {"name": "Umgesetzt", "color": "blue"},
-                    ]
-                }
-            },
-            "Erkannt am": {"date": {}},
-            "Letzter Scan": {"date": {}},
-        },
+        "properties": properties,
     })
     print(f"  Log-Datenbank erstellt: {db['id']}")
     return db["id"]
@@ -318,18 +314,16 @@ def _find_new_databases() -> dict:
     return found
 
 
-def ensure_databases() -> tuple[str, str, str, str]:
-    """Stellt sicher, dass alle 4 Datenbanken existieren.
+def ensure_basic_databases() -> tuple[str, str]:
+    """Stellt sicher, dass die Kern-Datenbanken existieren (Regular User).
 
     Returns:
-        Tuple of (hdd_db_id, projects_db_id, aggregated_db_id, log_db_id)
-        where projects_db_id = Speicherungen-DB (abwärtskompatibel).
+        Tuple of (hdd_db_id, projects_db_id)
+        where projects_db_id = Speicherungen-DB.
     """
     config = load_config()
     hdd_db_id = config.get("hdd_db_id")
     projects_db_id = config.get("projects_db_id")
-    aggregated_db_id = config.get("aggregated_projects_db_id")
-    log_db_id = config.get("log_db_id")
 
     # Bestehende Kern-DBs validieren
     if hdd_db_id:
@@ -344,18 +338,6 @@ def ensure_databases() -> tuple[str, str, str, str]:
             api_get(f"databases/{projects_db_id}")
         except httpx.HTTPStatusError:
             projects_db_id = None
-
-    if aggregated_db_id:
-        try:
-            api_get(f"databases/{aggregated_db_id}")
-        except httpx.HTTPStatusError:
-            aggregated_db_id = None
-
-    if log_db_id:
-        try:
-            api_get(f"databases/{log_db_id}")
-        except httpx.HTTPStatusError:
-            log_db_id = None
 
     # Bestehende Kern-Datenbanken suchen bevor neue erstellt werden
     if not hdd_db_id or not projects_db_id:
@@ -387,7 +369,41 @@ def ensure_databases() -> tuple[str, str, str, str]:
             pass
         config["db_title_migrated"] = True
 
-    # Neue Datenbanken suchen
+    config["hdd_db_id"] = hdd_db_id
+    config["projects_db_id"] = projects_db_id
+    save_config(config)
+
+    _migrate_basic_schema(hdd_db_id, projects_db_id)
+
+    return hdd_db_id, projects_db_id
+
+
+def ensure_databases() -> tuple[str, str, str, str]:
+    """Stellt sicher, dass alle 4 Datenbanken existieren (Admin).
+
+    Returns:
+        Tuple of (hdd_db_id, projects_db_id, aggregated_db_id, log_db_id)
+    """
+    hdd_db_id, projects_db_id = ensure_basic_databases()
+
+    config = load_config()
+    aggregated_db_id = config.get("aggregated_projects_db_id")
+    log_db_id = config.get("log_db_id")
+
+    # Admin-DBs validieren
+    if aggregated_db_id:
+        try:
+            api_get(f"databases/{aggregated_db_id}")
+        except httpx.HTTPStatusError:
+            aggregated_db_id = None
+
+    if log_db_id:
+        try:
+            api_get(f"databases/{log_db_id}")
+        except httpx.HTTPStatusError:
+            log_db_id = None
+
+    # Bestehende Admin-DBs suchen
     if not aggregated_db_id or not log_db_id:
         found_new = _find_new_databases()
         if not aggregated_db_id:
@@ -395,25 +411,23 @@ def ensure_databases() -> tuple[str, str, str, str]:
         if not log_db_id:
             log_db_id = found_new.get("log_db_id")
 
-    # Neue Datenbanken erstellen falls nötig
+    # Admin-DBs erstellen falls nötig
     if not aggregated_db_id:
         aggregated_db_id = create_aggregated_projects_database(hdd_db_id, projects_db_id)
     if not log_db_id:
-        log_db_id = create_log_database(aggregated_db_id)
+        log_db_id = create_log_database(aggregated_db_id, hdd_db_id)
 
-    config["hdd_db_id"] = hdd_db_id
-    config["projects_db_id"] = projects_db_id
     config["aggregated_projects_db_id"] = aggregated_db_id
     config["log_db_id"] = log_db_id
     save_config(config)
 
-    migrate_schema(hdd_db_id, projects_db_id, log_db_id, aggregated_db_id)
+    _migrate_admin_schema(hdd_db_id, aggregated_db_id, log_db_id)
 
     return hdd_db_id, projects_db_id, aggregated_db_id, log_db_id
 
 
-def migrate_schema(hdd_db_id: str, projects_db_id: str, log_db_id: str = "", aggregated_db_id: str = "") -> None:
-    """Stellt sicher, dass alle Properties existieren (idempotent)."""
+def _migrate_basic_schema(hdd_db_id: str, projects_db_id: str) -> None:
+    """Schema-Migration für Kern-Datenbanken (Datenträger + Speicherungen)."""
     try:
         api_patch(f"databases/{hdd_db_id}", {
             "properties": {
@@ -438,7 +452,6 @@ def migrate_schema(hdd_db_id: str, projects_db_id: str, log_db_id: str = "", agg
     except httpx.HTTPStatusError:
         pass
 
-    # Typ-Option "PROJECT" hinzufügen
     try:
         api_patch(f"databases/{projects_db_id}", {
             "properties": {
@@ -452,8 +465,10 @@ def migrate_schema(hdd_db_id: str, projects_db_id: str, log_db_id: str = "", agg
     except httpx.HTTPStatusError:
         pass
 
-    # Log: Schema-Migration (neue Typen, Priorität, Status-Option "Umgesetzt")
-    # Separate Calls nötig: Notion lehnt Farb-Änderungen bestehender Optionen ab.
+
+def _migrate_admin_schema(hdd_db_id: str, aggregated_db_id: str, log_db_id: str) -> None:
+    """Schema-Migration für Admin-Datenbanken (Projekte-Aggregation + Log)."""
+    # Log: Status-Option "Umgesetzt" + Prioritäten
     if log_db_id:
         try:
             api_patch(f"databases/{log_db_id}", {
@@ -483,18 +498,37 @@ def migrate_schema(hdd_db_id: str, projects_db_id: str, log_db_id: str = "", agg
         except httpx.HTTPStatusError:
             pass
 
-    # Projekte (aggregiert): Backup-Status hinzufügen
+    # Projekte (aggregiert): "HDDs" → "Datenträger" umbenennen, "Sicherungen" hinzufügen
     if aggregated_db_id:
         try:
-            api_patch(f"databases/{aggregated_db_id}", {
-                "properties": {
-                    "Backup-Status": {"select": {"options": [
-                        {"name": "Nicht gesichert", "color": "red"},
-                        {"name": "Teilweise", "color": "orange"},
-                        {"name": "Vollständig", "color": "green"},
-                    ]}},
-                }
-            })
+            db_info = api_get(f"databases/{aggregated_db_id}")
+            props = db_info.get("properties", {})
+            updates = {}
+            if "HDDs" in props:
+                updates["HDDs"] = {"name": "Datenträger"}
+            if "Backup-Status" in props:
+                updates["Backup-Status"] = None
+            updates["Sicherungen"] = {"number": {"format": "number"}}
+            if updates:
+                api_patch(f"databases/{aggregated_db_id}", {"properties": updates})
+        except httpx.HTTPStatusError:
+            pass
+
+    # Log: "HDDs" (rich_text) → "Datenträger" (Relation) migrieren
+    if log_db_id and hdd_db_id:
+        try:
+            db_info = api_get(f"databases/{log_db_id}")
+            props = db_info.get("properties", {})
+            if "HDDs" in props:
+                api_patch(f"databases/{log_db_id}", {"properties": {"HDDs": None}})
+            if "Datenträger" not in props:
+                api_patch(f"databases/{log_db_id}", {
+                    "properties": {
+                        "Datenträger": {
+                            "relation": {"database_id": hdd_db_id, "type": "single_property", "single_property": {}}
+                        },
+                    }
+                })
         except httpx.HTTPStatusError:
             pass
 
@@ -691,30 +725,9 @@ def _has_size_mismatch(entries: list[dict]) -> bool:
     return False
 
 
-def _compute_backup_status(entries: list[dict]) -> str:
-    """Berechnet den Backup-Status eines Projekts.
-
-    Returns:
-        "Nicht gesichert" — mindestens 1 Typ nur auf 1 HDD
-        "Teilweise" — alle Typen auf 2+ HDDs, aber Größen stimmen nicht überein
-        "Vollständig" — alle Typen auf 2+ HDDs, alle Größen identisch
-    """
-    by_type = defaultdict(list)
-    for e in entries:
-        if e["type"]:
-            by_type[e["type"]].append(e)
-
-    for type_entries in by_type.values():
-        unique_hdds = set(e["hdd_id"] for e in type_entries if e["hdd_id"])
-        if len(unique_hdds) < 2:
-            return "Nicht gesichert"
-
-    for type_entries in by_type.values():
-        sizes = set(e["size_gb"] for e in type_entries)
-        if len(sizes) > 1:
-            return "Teilweise"
-
-    return "Vollständig"
+def _count_sicherungen(entries: list[dict]) -> int:
+    """Zählt auf wie vielen verschiedenen Datenträgern das Projekt gespeichert ist."""
+    return len(set(e["hdd_id"] for e in entries if e["hdd_id"]))
 
 
 def _upsert_log_entry(
@@ -724,7 +737,7 @@ def _upsert_log_entry(
     log_type: str,
     priority: str,
     details: str,
-    hdd_names_str: str,
+    hdd_ids: list[str],
     scan_date: str,
     agg_page_id: str | None = None,
     folder_type: str | None = None,
@@ -747,7 +760,7 @@ def _upsert_log_entry(
         "Typ": {"select": {"name": log_type}},
         "Priorität": {"select": {"name": priority}},
         "Details": {"rich_text": [{"text": {"content": details[:2000]}}]},
-        "HDDs": {"rich_text": [{"text": {"content": hdd_names_str}}]},
+        "Datenträger": {"relation": [{"id": hid} for hid in hdd_ids]},
         "Status": {"select": {"name": "Open"}},
     }
     if scan_date:
@@ -898,21 +911,21 @@ def sync_aggregated_projects(
         if len(overview) > 2000:
             overview = overview[:1997] + "..."
 
-        # Mismatch + Backup-Status prüfen
+        # Mismatch + Sicherungen berechnen
         has_mismatch = _has_size_mismatch(entries)
-        backup_status = _compute_backup_status(entries)
+        sicherungen = _count_sicherungen(entries)
 
         properties = {
             "Name": {"title": [{"text": {"content": agg_key}}]},
             "Projektname": {"rich_text": [{"text": {"content": project_name}}]},
             "Datum": {"date": {"start": date_str}},
             "Typen": {"multi_select": [{"name": t} for t in types]},
-            "HDDs": {"relation": [{"id": hid} for hid in hdd_ids]},
+            "Datenträger": {"relation": [{"id": hid} for hid in hdd_ids]},
             "Speicherungen": {"relation": [{"id": sid} for sid in speicherung_ids]},
             "Gesamtgröße (GB)": {"number": total_size},
+            "Sicherungen": {"number": sicherungen},
             "Übersicht": {"rich_text": [{"text": {"content": overview}}]},
             "Mismatch": {"checkbox": has_mismatch},
-            "Backup-Status": {"select": {"name": backup_status}},
         }
         if scan_date:
             properties["Letzter Scan"] = {"date": {"start": scan_date}}
@@ -987,6 +1000,10 @@ def sync_log(
             if e["type"] and e["hdd_name"]:
                 hdds_with_types[e["hdd_name"]].add(e["type"])
 
+        # Helper: HDD-IDs aus Entries extrahieren
+        def _hdd_ids_from(type_entries: list[dict]) -> list[str]:
+            return sorted(set(e["hdd_id"] for e in type_entries if e["hdd_id"]))
+
         # 1. MISSING_BACKUP — Typ nur auf 1 HDD
         for type_name, type_entries in by_type.items():
             unique_hdds = set(e["hdd_name"] for e in type_entries if e["hdd_name"])
@@ -1000,7 +1017,7 @@ def sync_log(
                 _upsert_log_entry(
                     log_db_id, log_map, log_name,
                     log_type="MISSING_BACKUP", priority="Kritisch",
-                    details=details, hdd_names_str=hdd_name,
+                    details=details, hdd_ids=_hdd_ids_from(type_entries),
                     scan_date=scan_date, agg_page_id=agg_page_id,
                     folder_type=type_name,
                 )
@@ -1022,11 +1039,10 @@ def sync_log(
                 details = " vs ".join(details_parts)
                 diff = round(max(sizes) - min(sizes), 2)
                 details += f" (diff: {diff} GB)"
-                hdd_names_str = ", ".join(e["hdd_name"] for e in type_entries)
                 _upsert_log_entry(
                     log_db_id, log_map, log_name,
                     log_type="SIZE_MISMATCH", priority="Warnung",
-                    details=details, hdd_names_str=hdd_names_str,
+                    details=details, hdd_ids=_hdd_ids_from(type_entries),
                     scan_date=scan_date, agg_page_id=agg_page_id,
                     folder_type=type_name, diff_gb=diff,
                 )
@@ -1039,17 +1055,21 @@ def sync_log(
             missing_types = all_types - hdd_types
 
             if missing_types:
-                # Größen der fehlenden Typen von anderen HDDs sammeln
                 missing_parts = []
                 for mt in sorted(missing_types):
                     sizes_for_type = [e["size_gb"] for e in by_type[mt]]
                     avg_size = round(sum(sizes_for_type) / len(sizes_for_type), 1)
                     missing_parts.append(f"{mt} ({avg_size} GB)")
                 details = "Fehlt: " + ", ".join(missing_parts)
+                # HDD-ID für diesen Datenträger finden
+                incomplete_hdd_ids = sorted(set(
+                    e["hdd_id"] for e in entries
+                    if e["hdd_name"] == hdd_name and e["hdd_id"]
+                ))
                 _upsert_log_entry(
                     log_db_id, log_map, log_name,
                     log_type="INCOMPLETE_BACKUP", priority="Warnung",
-                    details=details, hdd_names_str=hdd_name,
+                    details=details, hdd_ids=incomplete_hdd_ids,
                     scan_date=scan_date, agg_page_id=agg_page_id,
                 )
             else:
@@ -1065,11 +1085,10 @@ def sync_log(
                 for e in type_entries:
                     copies_parts.append(f"{e['hdd_name']} ({e['size_gb']} GB)")
                 details = f"{len(unique_hdds)} Kopien: " + ", ".join(copies_parts)
-                hdd_names_str = ", ".join(unique_hdds)
                 _upsert_log_entry(
                     log_db_id, log_map, log_name,
                     log_type="EXCESS_COPIES", priority="Info",
-                    details=details, hdd_names_str=hdd_names_str,
+                    details=details, hdd_ids=_hdd_ids_from(type_entries),
                     scan_date=scan_date, agg_page_id=agg_page_id,
                     folder_type=type_name,
                 )
@@ -1146,7 +1165,7 @@ def run_sync(report_path: str) -> None:
     user_name = config.get("user_name", "")
 
     scan_date = report["scan_info"].get("scan_date", "")
-    hdd_db_id, projects_db_id, aggregated_db_id, log_db_id = ensure_databases()
+    hdd_db_id, projects_db_id = ensure_basic_databases()
     hdd_page_id = sync_hdd(hdd_db_id, report, disk_info, user_name)
     sync_projects(projects_db_id, report, hdd_page_id, scan_date)
 
