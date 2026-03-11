@@ -75,7 +75,7 @@ def install_update(version: str, on_status=None) -> bool:
         if on_status:
             on_status(msg)
 
-    zip_url = f"{GITHUB_RELEASE_BASE}/v{version}/NXT-Scanner-v{version}-arm64.zip"
+    zip_url = f"{GITHUB_RELEASE_BASE}/v{version}/NXT-Scanner-{version}.zip"
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
