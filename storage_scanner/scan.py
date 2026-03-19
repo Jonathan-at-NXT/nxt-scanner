@@ -17,6 +17,31 @@ from .report import generate_report, save_report
 from .utils import format_size
 
 
+def _safe_mtime(path: Path) -> str:
+    """stat().st_mtime mit Fallback – exFAT-Ordner mit Sonderzeichen können EINVAL werfen."""
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    except OSError:
+        return datetime.now().isoformat()
+
+
+def _safe_listdir(path: Path) -> list[Path]:
+    """Listet Unterordner auf und überspringt Einträge mit defekten Metadaten (exFAT EINVAL)."""
+    result = []
+    try:
+        for entry in path.iterdir():
+            if entry.name.startswith(".") or entry.name.startswith("@"):
+                continue
+            try:
+                if entry.is_dir():
+                    result.append(entry)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return sorted(result, key=lambda p: p.name)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Scannt einen Datenträger und erkennt Projektordner anhand der Naming-Convention."
@@ -42,18 +67,11 @@ def main():
 
     # Alle direkten Unterordner auflisten (nur 1. Ebene, ohne versteckte)
     # "NXT STUDIOS"-Ordner transparent auflösen → dessen Inhalt stattdessen scannen
-    raw_folders = sorted(
-        [entry for entry in scan_path.iterdir() if entry.is_dir() and not entry.name.startswith(".")],
-        key=lambda p: p.name,
-    )
+    raw_folders = _safe_listdir(scan_path)
     subfolders = []
     for folder in raw_folders:
         if folder.name.upper() == "NXT STUDIOS":
-            inner = sorted(
-                [e for e in folder.iterdir() if e.is_dir() and not e.name.startswith(".")],
-                key=lambda p: p.name,
-            )
-            subfolders.extend(inner)
+            subfolders.extend(_safe_listdir(folder))
         else:
             subfolders.append(folder)
 
@@ -67,54 +85,55 @@ def main():
     print(f"Scanne {len(subfolders)} Ordner in: {scan_path}\n")
 
     for folder in tqdm(subfolders, desc="Analysiere Ordner", unit="Ordner"):
-        # Naming-Convention prüfen
-        validation = validate_folder(folder.name)
+        try:
+            validation = validate_folder(folder.name)
+            stats = analyze_folder(folder)
 
-        # Größe und Dateianzahl berechnen
-        stats = analyze_folder(folder)
+            entry = {
+                "name": folder.name,
+                "absolute_path": str(folder),
+                "size_bytes": stats["size_bytes"],
+                "size_human": format_size(stats["size_bytes"]),
+                "file_count": stats["file_count"],
+                "last_modified": _safe_mtime(folder),
+            }
 
-        entry = {
-            "name": folder.name,
-            "absolute_path": str(folder),
-            "size_bytes": stats["size_bytes"],
-            "size_human": format_size(stats["size_bytes"]),
-            "file_count": stats["file_count"],
-            "last_modified": datetime.fromtimestamp(folder.stat().st_mtime).isoformat(),
-        }
+            if validation:
+                entry["date"] = validation["date"]
+                entry["project_name"] = validation["project_name"]
+                entry["type"] = validation["type"]
 
-        if validation:
-            entry["date"] = validation["date"]
-            entry["project_name"] = validation["project_name"]
-            entry["type"] = validation["type"]
+                if validation["type"] == "PROJECT":
+                    children = []
+                    child_folders = _safe_listdir(folder)
+                    for child_folder in child_folders:
+                        try:
+                            child_validation = validate_folder(child_folder.name)
+                            child_stats = analyze_folder(child_folder)
+                            child_entry = {
+                                "name": child_folder.name,
+                                "absolute_path": str(child_folder),
+                                "size_bytes": child_stats["size_bytes"],
+                                "size_human": format_size(child_stats["size_bytes"]),
+                                "file_count": child_stats["file_count"],
+                                "last_modified": _safe_mtime(child_folder),
+                            }
+                            if child_validation:
+                                child_entry["date"] = child_validation["date"]
+                                child_entry["project_name"] = child_validation["project_name"]
+                                child_entry["type"] = child_validation["type"]
+                            children.append(child_entry)
+                        except OSError as e:
+                            print(f"  Übersprungen (Fehler): {child_folder.name} – {e}")
+                            continue
+                    entry["children"] = children
 
-            # PROJECT-Ordner: Eine Ebene tiefer scannen
-            if validation["type"] == "PROJECT":
-                children = []
-                child_folders = sorted(
-                    [e for e in folder.iterdir() if e.is_dir() and not e.name.startswith(".")],
-                    key=lambda p: p.name,
-                )
-                for child_folder in child_folders:
-                    child_validation = validate_folder(child_folder.name)
-                    child_stats = analyze_folder(child_folder)
-                    child_entry = {
-                        "name": child_folder.name,
-                        "absolute_path": str(child_folder),
-                        "size_bytes": child_stats["size_bytes"],
-                        "size_human": format_size(child_stats["size_bytes"]),
-                        "file_count": child_stats["file_count"],
-                        "last_modified": datetime.fromtimestamp(child_folder.stat().st_mtime).isoformat(),
-                    }
-                    if child_validation:
-                        child_entry["date"] = child_validation["date"]
-                        child_entry["project_name"] = child_validation["project_name"]
-                        child_entry["type"] = child_validation["type"]
-                    children.append(child_entry)
-                entry["children"] = children
-
-            projects.append(entry)
-        else:
-            unassigned.append(entry)
+                projects.append(entry)
+            else:
+                unassigned.append(entry)
+        except OSError as e:
+            print(f"  Übersprungen (Fehler): {folder.name} – {e}")
+            continue
 
     # Report generieren und speichern
     report = generate_report(str(scan_path), projects, unassigned)
@@ -151,18 +170,11 @@ def run_scan(volume_path: str, output_path: str) -> None:
     if not scan_path.is_dir():
         raise NotADirectoryError(f"Pfad ist kein Verzeichnis: {scan_path}")
 
-    raw_folders = sorted(
-        [entry for entry in scan_path.iterdir() if entry.is_dir() and not entry.name.startswith(".")],
-        key=lambda p: p.name,
-    )
+    raw_folders = _safe_listdir(scan_path)
     subfolders = []
     for folder in raw_folders:
         if folder.name.upper() == "NXT STUDIOS":
-            inner = sorted(
-                [e for e in folder.iterdir() if e.is_dir() and not e.name.startswith(".")],
-                key=lambda p: p.name,
-            )
-            subfolders.extend(inner)
+            subfolders.extend(_safe_listdir(folder))
         else:
             subfolders.append(folder)
 
@@ -173,50 +185,55 @@ def run_scan(volume_path: str, output_path: str) -> None:
     unassigned = []
 
     for folder in subfolders:
-        validation = validate_folder(folder.name)
-        stats = analyze_folder(folder)
+        try:
+            validation = validate_folder(folder.name)
+            stats = analyze_folder(folder)
 
-        entry = {
-            "name": folder.name,
-            "absolute_path": str(folder),
-            "size_bytes": stats["size_bytes"],
-            "size_human": format_size(stats["size_bytes"]),
-            "file_count": stats["file_count"],
-            "last_modified": datetime.fromtimestamp(folder.stat().st_mtime).isoformat(),
-        }
+            entry = {
+                "name": folder.name,
+                "absolute_path": str(folder),
+                "size_bytes": stats["size_bytes"],
+                "size_human": format_size(stats["size_bytes"]),
+                "file_count": stats["file_count"],
+                "last_modified": _safe_mtime(folder),
+            }
 
-        if validation:
-            entry["date"] = validation["date"]
-            entry["project_name"] = validation["project_name"]
-            entry["type"] = validation["type"]
+            if validation:
+                entry["date"] = validation["date"]
+                entry["project_name"] = validation["project_name"]
+                entry["type"] = validation["type"]
 
-            if validation["type"] == "PROJECT":
-                children = []
-                child_folders = sorted(
-                    [e for e in folder.iterdir() if e.is_dir() and not e.name.startswith(".")],
-                    key=lambda p: p.name,
-                )
-                for child_folder in child_folders:
-                    child_validation = validate_folder(child_folder.name)
-                    child_stats = analyze_folder(child_folder)
-                    child_entry = {
-                        "name": child_folder.name,
-                        "absolute_path": str(child_folder),
-                        "size_bytes": child_stats["size_bytes"],
-                        "size_human": format_size(child_stats["size_bytes"]),
-                        "file_count": child_stats["file_count"],
-                        "last_modified": datetime.fromtimestamp(child_folder.stat().st_mtime).isoformat(),
-                    }
-                    if child_validation:
-                        child_entry["date"] = child_validation["date"]
-                        child_entry["project_name"] = child_validation["project_name"]
-                        child_entry["type"] = child_validation["type"]
-                    children.append(child_entry)
-                entry["children"] = children
+                if validation["type"] == "PROJECT":
+                    children = []
+                    child_folders = _safe_listdir(folder)
+                    for child_folder in child_folders:
+                        try:
+                            child_validation = validate_folder(child_folder.name)
+                            child_stats = analyze_folder(child_folder)
+                            child_entry = {
+                                "name": child_folder.name,
+                                "absolute_path": str(child_folder),
+                                "size_bytes": child_stats["size_bytes"],
+                                "size_human": format_size(child_stats["size_bytes"]),
+                                "file_count": child_stats["file_count"],
+                                "last_modified": _safe_mtime(child_folder),
+                            }
+                            if child_validation:
+                                child_entry["date"] = child_validation["date"]
+                                child_entry["project_name"] = child_validation["project_name"]
+                                child_entry["type"] = child_validation["type"]
+                            children.append(child_entry)
+                        except OSError as e:
+                            print(f"  Übersprungen (Fehler): {child_folder.name} – {e}")
+                            continue
+                    entry["children"] = children
 
-            projects.append(entry)
-        else:
-            unassigned.append(entry)
+                projects.append(entry)
+            else:
+                unassigned.append(entry)
+        except OSError as e:
+            print(f"  Übersprungen (Fehler): {folder.name} – {e}")
+            continue
 
     report = generate_report(str(scan_path), projects, unassigned)
     save_report(report, out)

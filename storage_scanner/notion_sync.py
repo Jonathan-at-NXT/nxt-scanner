@@ -122,6 +122,7 @@ def create_projects_database(hdd_db_id: str) -> str:
                     "options": [
                         {"name": "Valid", "color": "green"},
                         {"name": "Unassigned", "color": "red"},
+                        {"name": "Manuell", "color": "blue"},
                     ]
                 }
             },
@@ -460,6 +461,9 @@ def _migrate_basic_schema(hdd_db_id: str, projects_db_id: str) -> None:
                     {"name": "PROJECT", "color": "purple"},
                     {"name": "PROXIES", "color": "pink"},
                 ]}},
+                "Status": {"select": {"options": [
+                    {"name": "Manuell", "color": "blue"},
+                ]}},
             }
         })
     except httpx.HTTPStatusError:
@@ -615,10 +619,14 @@ def sync_projects(projects_db_id: str, report: dict, hdd_page_id: str, scan_date
         {"property": "HDD", "relation": {"contains": hdd_page_id}},
     )
     existing = {}
+    existing_status = {}
     for page in existing_pages:
         title = page["properties"]["Name"]["title"]
         if title:
-            existing[title[0]["plain_text"]] = page["id"]
+            name = title[0]["plain_text"]
+            existing[name] = page["id"]
+            status_prop = page["properties"].get("Status", {}).get("select")
+            existing_status[name] = status_prop["name"] if status_prop else None
 
     synced_names = set()
 
@@ -626,6 +634,23 @@ def sync_projects(projects_db_id: str, report: dict, hdd_page_id: str, scan_date
     for project in report["projects"]:
         name = project["name"]
         synced_names.add(name)
+
+        # Manuell zugeordnete Einträge: nur dynamische Felder aktualisieren
+        if name in existing and existing_status.get(name) == "Manuell":
+            manual_props = {
+                "Größe (GB)": {"number": bytes_to_gb(project["size_bytes"])},
+                "Dateien": {"number": project["file_count"]},
+                "Absoluter Pfad": {"rich_text": [{"text": {"content": project.get("absolute_path", "")}}]},
+            }
+            if scan_date:
+                manual_props["Letzter Scan"] = {"date": {"start": scan_date}}
+            if project.get("last_modified"):
+                manual_props["Letzte Änderung"] = {"date": {"start": project["last_modified"][:10]}}
+            api_patch(f"pages/{existing[name]}", {"properties": manual_props})
+            # Children auch als synced markieren
+            for child in project.get("children", []):
+                synced_names.add(child["name"])
+            continue
 
         properties = {
             "Name": {"title": [{"text": {"content": name}}]},
@@ -650,6 +675,20 @@ def sync_projects(projects_db_id: str, report: dict, hdd_page_id: str, scan_date
         for child in project.get("children", []):
             child_name = child["name"]
             synced_names.add(child_name)
+
+            # Manuell zugeordnete Children: nur dynamische Felder
+            if child_name in existing and existing_status.get(child_name) == "Manuell":
+                manual_props = {
+                    "Größe (GB)": {"number": bytes_to_gb(child["size_bytes"])},
+                    "Dateien": {"number": child["file_count"]},
+                    "Absoluter Pfad": {"rich_text": [{"text": {"content": child.get("absolute_path", "")}}]},
+                }
+                if scan_date:
+                    manual_props["Letzter Scan"] = {"date": {"start": scan_date}}
+                if child.get("last_modified"):
+                    manual_props["Letzte Änderung"] = {"date": {"start": child["last_modified"][:10]}}
+                api_patch(f"pages/{existing[child_name]}", {"properties": manual_props})
+                continue
 
             child_props = {
                 "Name": {"title": [{"text": {"content": child_name}}]},
@@ -679,6 +718,20 @@ def sync_projects(projects_db_id: str, report: dict, hdd_page_id: str, scan_date
     for folder in report["unassigned"]:
         name = folder["name"]
         synced_names.add(name)
+
+        # Manuell zugeordnete Einträge: nur dynamische Felder aktualisieren
+        if name in existing and existing_status.get(name) == "Manuell":
+            manual_props = {
+                "Größe (GB)": {"number": bytes_to_gb(folder["size_bytes"])},
+                "Dateien": {"number": folder["file_count"]},
+                "Absoluter Pfad": {"rich_text": [{"text": {"content": folder.get("absolute_path", "")}}]},
+            }
+            if scan_date:
+                manual_props["Letzter Scan"] = {"date": {"start": scan_date}}
+            if folder.get("last_modified"):
+                manual_props["Letzte Änderung"] = {"date": {"start": folder["last_modified"][:10]}}
+            api_patch(f"pages/{existing[name]}", {"properties": manual_props})
+            continue
 
         properties = {
             "Name": {"title": [{"text": {"content": name}}]},
@@ -816,10 +869,12 @@ def sync_aggregated_projects(
     Returns:
         Liste der Projektgruppen für Mismatch-Analyse.
     """
-    # 1. Alle Valid-Einträge aus Speicherungen laden
+    # 1. Alle Valid + Manuell-Einträge aus Speicherungen laden
     all_entries = query_database(projects_db_id, {
-        "property": "Status",
-        "select": {"equals": "Valid"},
+        "or": [
+            {"property": "Status", "select": {"equals": "Valid"}},
+            {"property": "Status", "select": {"equals": "Manuell"}},
+        ],
     })
 
     # 2. Alle HDD-Seiten laden (für Name-Lookup)

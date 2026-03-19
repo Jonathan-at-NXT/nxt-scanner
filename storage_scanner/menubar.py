@@ -73,6 +73,7 @@ class StorageScannerApp(rumps.App):
         self._current_scan = None
         self._known_volumes: set[str] = set()
         self._scan_times = self._load_scan_times()
+        self._fail_counts: dict[str, int] = {}
         config = load_config()
         self._user_name = config.get("user_name", "")
         self._admin_mode = config.get("admin_mode", False) is True
@@ -275,11 +276,13 @@ class StorageScannerApp(rumps.App):
                 self._log(f"Neuer Datenträger erkannt: {name}")
                 self.enqueue(name, silent=True)
 
-        # Rescan fälliger Volumes
+        # Rescan fälliger Volumes (mit Backoff bei wiederholten Fehlern)
         for name in sorted(current):
             if not is_auto_scan_volume(name):
                 continue
-            if self._seconds_since_last_scan(name) >= RESCAN_INTERVAL_SECONDS:
+            fails = self._fail_counts.get(name, 0)
+            backoff = RESCAN_INTERVAL_SECONDS * (2 ** min(fails, 4)) if fails else RESCAN_INTERVAL_SECONDS
+            if self._seconds_since_last_scan(name) >= backoff:
                 self.enqueue(name, silent=True)
 
     # ── Menü aktualisieren ──────────────────────────────────────────
@@ -393,10 +396,14 @@ class StorageScannerApp(rumps.App):
 
             self._scan_times[volume_name] = datetime.now().isoformat()
             self._save_scan_times()
+            self._fail_counts.pop(volume_name, None)
 
             self._log(f"Scan + Sync abgeschlossen: {volume_name}")
             rumps.notification("NXT Storage Scanner", "Fertig", f"{volume_name} → Notion aktualisiert")
         except Exception as e:
+            self._fail_counts[volume_name] = self._fail_counts.get(volume_name, 0) + 1
+            self._scan_times[volume_name] = datetime.now().isoformat()
+            self._save_scan_times()
             self._notify_error(volume_name, str(e))
 
     def _log(self, message: str):
@@ -470,12 +477,11 @@ class StorageScannerApp(rumps.App):
         from .admin import run_fullfilment_sync
         try:
             stats = run_fullfilment_sync()
-            updated_total = stats['updated_fullfilment'] + stats['updated_projekte']
-            self._log(f"Fullfilment Sync: {stats['matched']}/{stats['total_fullfilment']} zugeordnet, {updated_total} aktualisiert")
+            self._log(f"Fullfilment Sync: {stats['total_linked']}/{stats['total_projekte']} verlinkt ({stats['new_linked']} neu), {stats['updated_fullfilment']} Datenträger aktualisiert")
             rumps.notification(
                 "NXT Storage Scanner",
                 "Fullfilment Sync fertig",
-                f"{stats['matched']} von {stats['total_fullfilment']} Projekten zugeordnet, {updated_total} aktualisiert",
+                f"{stats['total_linked']} verlinkt ({stats['new_linked']} neu), {stats['updated_fullfilment']} Datenträger aktualisiert",
             )
         except Exception as e:
             self._log(f"FEHLER bei Fullfilment Sync: {str(e).strip()[:200]}")

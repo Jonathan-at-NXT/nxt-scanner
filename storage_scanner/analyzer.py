@@ -1,33 +1,85 @@
-"""Ordneranalyse – Größe und Dateianzahl rekursiv berechnen."""
+"""Ordneranalyse – Größe und Dateianzahl rekursiv berechnen.
+
+Nutzt native CLI-Tools (du, find) für deutlich bessere Performance auf
+großen HDDs / Spinning Disks. Fallback auf Python os.scandir() falls
+die CLI-Aufrufe fehlschlagen.
+"""
 
 import os
+import subprocess
 from pathlib import Path
 
 
 def analyze_folder(path: Path) -> dict:
     """Berechnet rekursiv Ordnergröße (Bytes) und Dateianzahl.
 
-    Nutzt os.scandir() für Performance.
+    Nutzt 'du -sk' und 'find -type f' für schnelle Analyse auf großen HDDs.
+    Fällt auf Python os.scandir() zurück falls CLI-Tools fehlschlagen.
 
     Returns:
         {"size_bytes": int, "file_count": int}
     """
-    total_size = 0
-    file_count = 0
+    size_bytes = _du_size(str(path))
+    file_count = _find_count(str(path))
 
-    try:
-        _scan_recursive(str(path), total_size_ref := [0], file_count_ref := [0])
-    except PermissionError:
-        pass
+    # Fallback auf Python wenn CLI fehlschlägt
+    if size_bytes is None or file_count is None:
+        size_ref, count_ref = [0], [0]
+        try:
+            _scan_recursive(str(path), size_ref, count_ref)
+        except PermissionError:
+            pass
+        if size_bytes is None:
+            size_bytes = size_ref[0]
+        if file_count is None:
+            file_count = count_ref[0]
 
     return {
-        "size_bytes": total_size_ref[0],
-        "file_count": file_count_ref[0],
+        "size_bytes": size_bytes,
+        "file_count": file_count,
     }
 
 
+def _du_size(path: str) -> int | None:
+    """Ordnergröße via 'du -sk' (nutzt Filesystem-Metadaten, viel schneller)."""
+    try:
+        result = subprocess.run(
+            ["du", "-sk", path],
+            capture_output=True, text=True, timeout=600,
+        )
+        if result.returncode == 0:
+            return int(result.stdout.split()[0]) * 1024
+    except (subprocess.TimeoutExpired, ValueError, IndexError, OSError):
+        pass
+    return None
+
+
+def _find_count(path: str) -> int | None:
+    """Dateianzahl via 'find -type f | wc -l' (schneller als Python-Rekursion)."""
+    try:
+        find_proc = subprocess.Popen(
+            ["find", path, "-type", "f"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+        wc_proc = subprocess.Popen(
+            ["wc", "-l"],
+            stdin=find_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+        find_proc.stdout.close()
+        output, _ = wc_proc.communicate(timeout=600)
+        find_proc.wait(timeout=5)
+        return int(output.strip())
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        for proc in (find_proc, wc_proc):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+    return None
+
+
 def _scan_recursive(path: str, size_ref: list[int], count_ref: list[int]) -> None:
-    """Rekursiver Scan mit os.scandir()."""
+    """Fallback: Rekursiver Scan mit os.scandir()."""
     try:
         with os.scandir(path) as entries:
             for entry in entries:

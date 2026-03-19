@@ -2,6 +2,7 @@
 
 import json
 import logging
+import platform
 import shutil
 import ssl
 import subprocess
@@ -23,6 +24,14 @@ GITHUB_API_LATEST = "https://api.github.com/repos/Jonathan-at-NXT/nxt-scanner/re
 GITHUB_RELEASE_BASE = "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/download"
 APP_INSTALL_PATH = Path("/Applications/NXT Scanner.app")
 _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+
+
+def _get_arch_suffix() -> str:
+    """Gibt den Architektur-Suffix für den ZIP-Dateinamen zurück."""
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "i386"):
+        return "x86_64"
+    return "arm64"
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -75,7 +84,8 @@ def install_update(version: str, on_status=None) -> bool:
         if on_status:
             on_status(msg)
 
-    zip_url = f"{GITHUB_RELEASE_BASE}/v{version}/NXT-Scanner-{version}.zip"
+    arch = _get_arch_suffix()
+    zip_url = f"{GITHUB_RELEASE_BASE}/v{version}/NXT-Scanner-{version}-{arch}.zip"
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)

@@ -56,7 +56,14 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'unittest', 'pydoc', 'doctest'],
+    excludes=[
+        'tkinter', 'unittest', 'pydoc', 'doctest',
+        # ARM-only Packages – nicht von der App genutzt, blockieren x86_64-Build
+        'PIL', 'Pillow', 'numpy', 'pandas', 'matplotlib', 'scipy', 'sklearn',
+        'contourpy', 'cv2', 'hf_transfer', 'hf_xet', 'kiwisolver',
+        'markupsafe', 'mlx', 'regex', 'safetensors', 'sentencepiece',
+        'tokenizers', 'torch', 'yaml',
+    ],
     noarchive=False,
     optimize=0,
 )

@@ -2,7 +2,8 @@
 
 Matcht Projekte aus der Scanner-Projekte-DB (aggregiert) gegen die Fullfilment-DB
 und verlinkt die zugehörigen Datenträger als Relation.
-Setzt außerdem eine "Fullfilment"-Checkbox in der Projekte-DB.
+Verlinkt Projekte per Relation (nicht Checkbox) mit der Fullfilment-DB.
+Bestehende manuelle Verlinkungen werden nicht überschrieben.
 Nutzt eine In-Memory-SQLite-DB für schnelles Matching.
 """
 
@@ -49,7 +50,7 @@ def run_fullfilment_sync() -> dict:
 
     # 1. Properties sicherstellen
     _ensure_fullfilment_property(fullfilment_db_id, datentraeger_db_id)
-    _ensure_projekte_checkbox(aggregated_db_id)
+    _ensure_fullfilment_relation(aggregated_db_id, fullfilment_db_id)
 
     # 2. Daten aus Notion ziehen
     print("  Fullfilment Sync: Lade Datenträger...")
@@ -61,25 +62,35 @@ def run_fullfilment_sync() -> dict:
     print("  Fullfilment Sync: Lade Fullfilment...")
     fullfilment_entries = _pull_fullfilment(fullfilment_db_id)
 
-    # 3. SQLite-Matching
+    # 3. Bereits verlinkte Projekte zählen
+    already_linked = sum(1 for p in projekte if p["fullfilment_id"])
+
+    # 4. SQLite-Matching (nur für unverlinkte Projekte)
     print("  Fullfilment Sync: Matching...")
     matches = _match_in_sqlite(projekte, fullfilment_entries)
-    matched_project_names = {m["project_name"] for m in matches}
 
-    # 4. Fullfilment-DB: Datenträger verlinken
-    print(f"  Fullfilment Sync: {len(matches)} Matches, verlinke Datenträger...")
-    updated_ff = _write_matches_to_fullfilment(matches)
+    # 5. Neue Matches: Fullfilment-Relation in Projekte-DB setzen
+    print(f"  Fullfilment Sync: {len(matches)} neue Matches...")
+    new_linked = _write_new_matches(matches)
 
-    # 5. Projekte-DB: Checkbox setzen/entfernen
-    print("  Fullfilment Sync: Aktualisiere Projekte-Checkbox...")
-    updated_proj = _update_projekte_checkbox(projekte, matched_project_names)
+    # Projekte-Liste aktualisieren (neu verlinkte Projekte)
+    matched_ff_ids = {m["proj_page_id"]: m["ff_page_id"] for m in matches if m["proj_page_id"]}
+    for proj in projekte:
+        if proj["page_id"] in matched_ff_ids:
+            proj["fullfilment_id"] = matched_ff_ids[proj["page_id"]]
 
+    # 6. Datenträger für ALLE verlinkten Projekte in Fullfilment-DB syncen
+    print("  Fullfilment Sync: Datenträger aktualisieren...")
+    updated_ff = _sync_datentraeger_to_fullfilment(projekte, fullfilment_entries)
+
+    total_linked = already_linked + new_linked
     return {
         "total_fullfilment": len(fullfilment_entries),
         "total_projekte": len(projekte),
-        "matched": len(matches),
+        "already_linked": already_linked,
+        "new_linked": new_linked,
+        "total_linked": total_linked,
         "updated_fullfilment": updated_ff,
-        "updated_projekte": updated_proj,
     }
 
 
@@ -115,16 +126,36 @@ def _ensure_fullfilment_property(db_id: str, hdd_db_id: str) -> None:
         print("  Fullfilment DB: 'Datenträger' von Text zu Relation migriert")
 
 
-def _ensure_projekte_checkbox(db_id: str) -> None:
-    """Erstellt 'Fullfilment' checkbox Property in Projekte-DB falls nicht vorhanden."""
+def _ensure_fullfilment_relation(db_id: str, fullfilment_db_id: str) -> None:
+    """Erstellt 'Fullfilment' Relation in Projekte-DB falls nicht vorhanden.
+
+    Migriert bestehende Checkbox zu Relation falls nötig.
+    """
     db_info = api_get(f"databases/{db_id}")
-    if "Fullfilment" not in db_info.get("properties", {}):
+    props = db_info.get("properties", {})
+    ff_prop = props.get("Fullfilment")
+
+    if not ff_prop:
+        # Neu erstellen als Relation
         api_patch(f"databases/{db_id}", {
             "properties": {
-                "Fullfilment": {"checkbox": {}},
+                "Fullfilment": {
+                    "relation": {"database_id": fullfilment_db_id, "type": "single_property", "single_property": {}},
+                },
             }
         })
-        print("  Projekte DB: 'Fullfilment' Checkbox erstellt")
+        print("  Projekte DB: 'Fullfilment' Relation erstellt")
+    elif ff_prop.get("type") == "checkbox":
+        # Migration: Checkbox → Relation (alte Property löschen, neue erstellen)
+        api_patch(f"databases/{db_id}", {"properties": {"Fullfilment": None}})
+        api_patch(f"databases/{db_id}", {
+            "properties": {
+                "Fullfilment": {
+                    "relation": {"database_id": fullfilment_db_id, "type": "single_property", "single_property": {}},
+                },
+            }
+        })
+        print("  Projekte DB: 'Fullfilment' von Checkbox zu Relation migriert")
 
 
 def _pull_datentraeger_names(datentraeger_db_id: str) -> dict[str, str]:
@@ -139,7 +170,7 @@ def _pull_datentraeger_names(datentraeger_db_id: str) -> dict[str, str]:
 
 
 def _pull_projekte(aggregated_db_id: str, dt_map: dict[str, str]) -> list[dict]:
-    """Lädt alle Projekte mit page_id, Projektname, Datenträger-IDs und aktuellem Checkbox-Wert."""
+    """Lädt alle Projekte mit page_id, Projektname, Datenträger-IDs und Fullfilment-Relation."""
     pages = query_database(aggregated_db_id)
 
     results = []
@@ -157,15 +188,16 @@ def _pull_projekte(aggregated_db_id: str, dt_map: dict[str, str]) -> list[dict]:
         dt_names = sorted(dt_map.get(rid, "") for rid in dt_ids)
         dt_names = [n for n in dt_names if n]
 
-        # Aktueller Checkbox-Wert
-        has_fullfilment = props.get("Fullfilment", {}).get("checkbox", False)
+        # Bestehende Fullfilment-Relation lesen
+        ff_rel = props.get("Fullfilment", {}).get("relation", [])
+        fullfilment_id = ff_rel[0]["id"] if ff_rel else None
 
         results.append({
             "page_id": page["id"],
             "project_name": project_name,
             "datentraeger_ids": dt_ids,
             "datentraeger_str": ", ".join(dt_names) if dt_names else "",
-            "has_fullfilment": has_fullfilment,
+            "fullfilment_id": fullfilment_id,
         })
 
     return results
@@ -201,11 +233,22 @@ def _match_in_sqlite(
     projekte: list[dict],
     fullfilment_entries: list[dict],
 ) -> list[dict]:
-    """Exaktes Matching per In-Memory-SQLite (case-insensitive)."""
+    """Exaktes Matching per In-Memory-SQLite (case-insensitive).
+
+    Nur Projekte OHNE bestehende Fullfilment-Relation werden gematcht.
+    """
+    # Nur Projekte ohne bestehende Verlinkung matchen
+    unlinked = [e for e in projekte if not e["fullfilment_id"]]
+
     # Lookup für Datenträger-IDs nach Projektname
     proj_dt_ids = {}
     for e in projekte:
         proj_dt_ids.setdefault(e["project_name"].upper(), e["datentraeger_ids"])
+
+    # Lookup für page_id nach Projektname (für Relation-Schreibung)
+    proj_page_ids = {}
+    for e in projekte:
+        proj_page_ids.setdefault(e["project_name"].upper(), e["page_id"])
 
     conn = sqlite3.connect(":memory:")
     cur = conn.cursor()
@@ -224,7 +267,7 @@ def _match_in_sqlite(
 
     cur.executemany(
         "INSERT INTO projekte VALUES (?)",
-        [(e["project_name"],) for e in projekte],
+        [(e["project_name"],) for e in unlinked],
     )
     cur.executemany(
         "INSERT INTO fullfilment VALUES (?, ?)",
@@ -248,9 +291,10 @@ def _match_in_sqlite(
     for row in cur.fetchall():
         project_name = row[2]
         matches.append({
-            "page_id": row[0],
+            "ff_page_id": row[0],
             "title": row[1],
             "project_name": project_name,
+            "proj_page_id": proj_page_ids.get(project_name.upper()),
             "datentraeger_ids": proj_dt_ids.get(project_name.upper(), []),
             "existing_datentraeger_ids": ff_existing.get(row[0], []),
         })
@@ -259,19 +303,44 @@ def _match_in_sqlite(
     return matches
 
 
-def _write_matches_to_fullfilment(matches: list[dict]) -> int:
-    """Verlinkt Datenträger in Fullfilment-DB. Überspringt unveränderte."""
+def _write_new_matches(matches: list[dict]) -> int:
+    """Schreibt Fullfilment-Relation in die Projekte-DB für neue Matches."""
     updated = 0
     for match in matches:
-        new_ids = sorted(match["datentraeger_ids"])
-        existing_ids = sorted(match["existing_datentraeger_ids"])
-        if new_ids == existing_ids:
+        if not match["proj_page_id"] or not match["ff_page_id"]:
+            continue
+        _api_patch_retry(f"pages/{match['proj_page_id']}", {
+            "properties": {
+                "Fullfilment": {"relation": [{"id": match["ff_page_id"]}]},
+            },
+        })
+        updated += 1
+        print(f"  Verlinkt: {match['project_name']} → {match['title']}")
+    return updated
+
+
+def _sync_datentraeger_to_fullfilment(projekte: list[dict], fullfilment_entries: list[dict]) -> int:
+    """Synct Datenträger-Relationen für alle verlinkten Projekte in die Fullfilment-DB.
+
+    Für jedes Projekt mit Fullfilment-Relation: Schreibt die Datenträger des
+    Projekts als Relation in den verlinkten Fullfilment-Eintrag.
+    """
+    # Lookup: Fullfilment page_id → bestehende Datenträger-IDs
+    ff_existing_dt = {e["page_id"]: e["existing_datentraeger_ids"] for e in fullfilment_entries}
+
+    updated = 0
+    for proj in projekte:
+        ff_id = proj["fullfilment_id"]
+        if not ff_id:
             continue
 
-        if not new_ids:
+        new_ids = sorted(proj["datentraeger_ids"])
+        existing_ids = sorted(ff_existing_dt.get(ff_id, []))
+
+        if new_ids == existing_ids or not new_ids:
             continue
 
-        _api_patch_retry(f"pages/{match['page_id']}", {
+        _api_patch_retry(f"pages/{ff_id}", {
             "properties": {
                 "Datenträger": {
                     "relation": [{"id": hid} for hid in new_ids],
@@ -279,25 +348,6 @@ def _write_matches_to_fullfilment(matches: list[dict]) -> int:
             },
         })
         updated += 1
-        print(f"  {match['title']} -> {len(new_ids)} Datenträger verlinkt")
-
-    return updated
-
-
-def _update_projekte_checkbox(projekte: list[dict], matched_names: set[str]) -> int:
-    """Setzt/entfernt Fullfilment-Checkbox in der Projekte-DB."""
-    matched_upper = {n.upper() for n in matched_names}
-    updated = 0
-    for proj in projekte:
-        should_be = proj["project_name"].upper() in matched_upper
-        if proj["has_fullfilment"] == should_be:
-            continue
-
-        _api_patch_retry(f"pages/{proj['page_id']}", {
-            "properties": {
-                "Fullfilment": {"checkbox": should_be},
-            },
-        })
-        updated += 1
+        print(f"  {proj['project_name']} → {len(new_ids)} Datenträger in Fullfilment aktualisiert")
 
     return updated
