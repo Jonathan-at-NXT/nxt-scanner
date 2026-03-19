@@ -41,13 +41,19 @@ def analyze_folder(path: Path) -> dict:
 
 
 def _du_size(path: str) -> int | None:
-    """Ordnergröße via 'du -sk' (nutzt Filesystem-Metadaten, viel schneller)."""
+    """Ordnergröße via 'du -sk' (nutzt Filesystem-Metadaten, viel schneller).
+
+    Gibt None zurück bei Timeout, Fehlern oder exFAT-Problemen (Invalid argument).
+    """
     try:
         result = subprocess.run(
             ["du", "-sk", path],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True, text=True, timeout=120,
         )
-        if result.returncode == 0:
+        # exFAT-Fehler auf stderr erkennen (du gibt trotzdem exit 0 zurück)
+        if result.stderr and "Invalid argument" in result.stderr:
+            return None
+        if result.returncode == 0 and result.stdout.strip():
             return int(result.stdout.split()[0]) * 1024
     except (subprocess.TimeoutExpired, ValueError, IndexError, OSError):
         pass
@@ -56,6 +62,8 @@ def _du_size(path: str) -> int | None:
 
 def _find_count(path: str) -> int | None:
     """Dateianzahl via 'find -type f | wc -l' (schneller als Python-Rekursion)."""
+    find_proc = None
+    wc_proc = None
     try:
         find_proc = subprocess.Popen(
             ["find", path, "-type", "f"],
@@ -66,15 +74,16 @@ def _find_count(path: str) -> int | None:
             stdin=find_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
         find_proc.stdout.close()
-        output, _ = wc_proc.communicate(timeout=600)
+        output, _ = wc_proc.communicate(timeout=120)
         find_proc.wait(timeout=5)
         return int(output.strip())
     except (subprocess.TimeoutExpired, ValueError, OSError):
         for proc in (find_proc, wc_proc):
-            try:
-                proc.kill()
-            except OSError:
-                pass
+            if proc is not None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
     return None
 
 
