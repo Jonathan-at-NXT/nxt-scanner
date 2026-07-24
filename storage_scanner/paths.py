@@ -41,6 +41,7 @@ LOG_PATH = DATA_DIR / "auto_scan.log"
 LAST_SCAN_PATH = DATA_DIR / ".last_scan_times.json"
 KNOWN_VOLUMES_PATH = DATA_DIR / ".known_volumes.json"
 REPORTS_DIR = DATA_DIR / "reports"
+DB_PATH = DATA_DIR / "nxt_scanner.db"
 
 
 def ensure_dirs() -> None:
