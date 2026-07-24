@@ -394,6 +394,9 @@ class StorageScannerApp(rumps.App):
             run_scan(volume_path, str(report_path))
             run_sync(str(report_path))
 
+            from .db import db_ingest_safe
+            db_ingest_safe(str(report_path), user_name=self._user_name)
+
             self._scan_times[volume_name] = datetime.now().isoformat()
             self._save_scan_times()
             self._fail_counts.pop(volume_name, None)
@@ -454,9 +457,34 @@ class StorageScannerApp(rumps.App):
     def _do_analysis(self):
         from .notion_sync import run_analysis
         try:
-            run_analysis()
-            self._log("Auswertung abgeschlossen")
-            rumps.notification("NXT Storage Scanner", "Auswertung fertig", "Projekte + Log aktualisiert")
+            summary = run_analysis()
+            excess = summary["excess_copies_gb"]
+            excess_n = summary["excess_copies_count"]
+            missing = summary["missing_backup_count"]
+            missing_gb = summary["missing_backup_gb"]
+            mismatch = summary["mismatch_count"]
+            total = summary["total_projects"]
+
+            log_parts = [f"{total} Projekte"]
+            if excess_n:
+                log_parts.append(f"{excess:.0f} GB Einspar-Potential ({excess_n} überzählige Kopien)")
+            if missing:
+                log_parts.append(f"{missing} ohne Backup ({missing_gb:.0f} GB)")
+            if mismatch:
+                log_parts.append(f"{mismatch} Mismatches")
+            self._log(f"Auswertung: {', '.join(log_parts)}")
+
+            # Notification mit Zusammenfassung
+            lines = [f"{total} Projekte ausgewertet"]
+            if excess_n:
+                lines.append(f"📦 {excess:.0f} GB Einspar-Potential ({excess_n} überzählige Kopien)")
+            if missing:
+                lines.append(f"⚠️ {missing} Ordner ohne Backup ({missing_gb:.0f} GB)")
+            if mismatch:
+                lines.append(f"🔀 {mismatch} Size-Mismatches")
+            if not excess_n and not missing and not mismatch:
+                lines.append("Alles sauber!")
+            rumps.notification("NXT Storage Scanner", "Auswertung fertig", "\n".join(lines))
         except Exception as e:
             self._log(f"FEHLER bei Auswertung: {str(e).strip()[:200]}")
             rumps.notification("NXT Storage Scanner", "Auswertung fehlgeschlagen", str(e)[:100])

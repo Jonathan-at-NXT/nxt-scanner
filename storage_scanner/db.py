@@ -27,7 +27,9 @@ CREATE INDEX IF NOT EXISTS idx_tree_disk_depth ON folder_tree(disk_uuid, depth);
 """
 
 
-def connect(db_path=DB_PATH) -> sqlite3.Connection:
+def connect(db_path=None) -> sqlite3.Connection:
+    if db_path is None:
+        db_path = DB_PATH
     conn = sqlite3.connect(str(db_path))
     conn.executescript(SCHEMA)
     return conn

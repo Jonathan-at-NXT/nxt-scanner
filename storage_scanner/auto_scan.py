@@ -103,6 +103,10 @@ def scan_and_sync(volume_name: str) -> bool:
 
         run_sync(str(report_path))
         log.info(f"Notion-Sync abgeschlossen: {volume_name}")
+
+        from .db import db_ingest_safe
+        if db_ingest_safe(str(report_path)):
+            log.info(f"DB-Ingest abgeschlossen: {volume_name}")
         return True
     except Exception as e:
         log.error(f"Fehler bei {volume_name}: {e}")
