@@ -12,9 +12,37 @@ from pathlib import Path
 from tqdm import tqdm
 
 from .rules import validate_folder
-from .analyzer import analyze_folder
+from .analyzer import analyze_folder, walk_tree, is_network_volume
 from .report import generate_report, save_report
 from .utils import format_size
+
+
+def _build_folder_tree(subfolders, scan_path) -> list[dict]:
+    """Baut den flachen folder_tree (disk-relative rel_paths) aus den
+    Top-Level-Ordnern. Netzlaufwerke: nur Top-Level (sub_depth=0)."""
+    sub_depth = 0 if is_network_volume(str(scan_path)) else 2
+    tree = []
+    for folder in subfolders:
+        for node in walk_tree(folder, sub_depth=sub_depth):
+            if node["rel_path"] == "":
+                rel = folder.name
+            else:
+                rel = f"{folder.name}/{node['rel_path']}"
+            if node["parent_rel_path"] is None:
+                parent = None
+            elif node["parent_rel_path"] == "":
+                parent = folder.name
+            else:
+                parent = f"{folder.name}/{node['parent_rel_path']}"
+            tree.append({
+                "rel_path": rel,
+                "depth": node["depth"] + 1,   # +1: Top-Level ist Ebene 1 unter Volume-Root
+                "parent_rel_path": parent,
+                "size_bytes": node["size_bytes"],
+                "file_count": node["file_count"],
+                "mtime": node["mtime"],
+            })
+    return tree
 
 
 def _safe_mtime(path: Path) -> str:
@@ -66,11 +94,11 @@ def main():
         sys.exit(1)
 
     # Alle direkten Unterordner auflisten (nur 1. Ebene, ohne versteckte)
-    # "NXT STUDIOS"-Ordner transparent auflösen → dessen Inhalt stattdessen scannen
+    # "NXT STUDIOS"- und "OLDER"-Ordner transparent auflösen → deren Inhalt stattdessen scannen
     raw_folders = _safe_listdir(scan_path)
     subfolders = []
     for folder in raw_folders:
-        if folder.name.upper() == "NXT STUDIOS":
+        if folder.name.upper() in {"NXT STUDIOS", "OLDER"}:
             subfolders.extend(_safe_listdir(folder))
         else:
             subfolders.append(folder)
@@ -137,6 +165,7 @@ def main():
 
     # Report generieren und speichern
     report = generate_report(str(scan_path), projects, unassigned)
+    report["folder_tree"] = _build_folder_tree(subfolders, scan_path)
     save_report(report, output_path)
 
     # Zusammenfassung im Terminal
@@ -173,7 +202,7 @@ def run_scan(volume_path: str, output_path: str) -> None:
     raw_folders = _safe_listdir(scan_path)
     subfolders = []
     for folder in raw_folders:
-        if folder.name.upper() == "NXT STUDIOS":
+        if folder.name.upper() in {"NXT STUDIOS", "OLDER"}:
             subfolders.extend(_safe_listdir(folder))
         else:
             subfolders.append(folder)
@@ -236,6 +265,7 @@ def run_scan(volume_path: str, output_path: str) -> None:
             continue
 
     report = generate_report(str(scan_path), projects, unassigned)
+    report["folder_tree"] = _build_folder_tree(subfolders, scan_path)
     save_report(report, out)
 
 
