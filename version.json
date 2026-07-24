@@ -1,5 +1,5 @@
 {
   "version": "1.9.0",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Zentrale Datenbank: zusätzlich zu Notion wird die Ordnerstruktur aller Datenträger (2 Ebenen tief) lokal in SQLite gespeichert und an eine zentrale Cloudflare-D1-DB gepusht. Ermöglicht schnelle Auswertungen (Auslastung, Backup-Redundanz) über alle Systeme. Notion-Ablauf unverändert. Admin: neuer Menüpunkt 'D1-Sync einrichten'."
+  "release_notes": "Zentrale Datenbank: zusätzlich zu Notion wird die Ordnerstruktur aller Datenträger (2 Ebenen tief) lokal in SQLite gespeichert und an eine zentrale Cloudflare-D1-DB gepusht. Ermöglicht schnelle Auswertungen (Auslastung, Backup-Redundanz) über alle Systeme. Notion-Ablauf unverändert. Menüpunkt 'D1-Sync einrichten' (für alle sichtbar) zum Eintragen des Tokens."
 }

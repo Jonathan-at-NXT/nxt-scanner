@@ -109,6 +109,7 @@ class StorageScannerApp(rumps.App):
         menu_items = [
             self.name_item,
             self.notion_item,
+            self.d1_item,
             None,
             self.status_item,
             self.queue_item,
@@ -123,7 +124,6 @@ class StorageScannerApp(rumps.App):
         if self._admin_mode:
             menu_items.append(self.analysis_item)
             menu_items.append(self.fullfilment_item)
-            menu_items.append(self.d1_item)
         menu_items.extend([
             None,
             self.version_item,
