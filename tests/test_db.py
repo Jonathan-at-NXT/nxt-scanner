@@ -32,6 +32,29 @@ def test_ingest_and_idempotent():
     assert conn.execute("SELECT COUNT(*) FROM disks").fetchone()[0] == 1
 
 
+def test_backfill_synthesizes_tree_from_projects_when_missing():
+    # Alt-Report ohne folder_tree, aber mit projects (inkl. children) + unassigned
+    old = {
+        "scan_info": {"scanned_path": "/Volumes/OLD 1", "scan_date": "2026-03-01T00:00:00+02:00", "volume_uuid": "OLD"},
+        "projects": [
+            {"name": "2025-01-01_P", "size_bytes": 900, "file_count": 3, "last_modified": "2025-01-01T00:00:00",
+             "type": "PROJECT",
+             "children": [
+                 {"name": "2025-01-01_P_FOOTAGE", "size_bytes": 800, "file_count": 2, "last_modified": "2025-01-01T00:00:00"},
+             ]},
+        ],
+        "unassigned": [
+            {"name": "LOOSE", "size_bytes": 100, "file_count": 1, "last_modified": "2025-01-01T00:00:00"},
+        ],
+    }
+    conn = db.connect(":memory:")
+    db.ingest_report(old, conn)
+    rels = dict(conn.execute("SELECT rel_path, depth FROM folder_tree WHERE disk_uuid='OLD'").fetchall())
+    assert rels == {"2025-01-01_P": 1, "2025-01-01_P/2025-01-01_P_FOOTAGE": 2, "LOOSE": 1}
+    # used_bytes = Summe depth-1 (900 + 100)
+    assert conn.execute("SELECT used_bytes FROM disks WHERE uuid='OLD'").fetchone()[0] == 1000
+
+
 def test_second_disk_isolated():
     conn = db.connect(":memory:")
     db.ingest_report(_report("U1", "NXT 001"), conn)

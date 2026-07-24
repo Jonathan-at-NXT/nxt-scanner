@@ -44,11 +44,36 @@ def _disk_uuid(report: dict) -> str:
     return f"name:{name}"
 
 
+def _tree_from_report(report: dict) -> list[dict]:
+    """Liefert den folder_tree. Fehlt er (Alt-Reports vor dem Feature),
+    werden depth-1/2-Knoten aus projects/unassigned + children synthetisiert."""
+    tree = report.get("folder_tree")
+    if tree:
+        return tree
+
+    synth = []
+    for item in report.get("projects", []) + report.get("unassigned", []):
+        name = item.get("name", "")
+        synth.append({
+            "rel_path": name, "depth": 1, "parent_rel_path": None,
+            "size_bytes": item.get("size_bytes", 0), "file_count": item.get("file_count", 0),
+            "mtime": item.get("last_modified"),
+        })
+        for child in item.get("children", []) or []:
+            cname = child.get("name", "")
+            synth.append({
+                "rel_path": f"{name}/{cname}", "depth": 2, "parent_rel_path": name,
+                "size_bytes": child.get("size_bytes", 0), "file_count": child.get("file_count", 0),
+                "mtime": child.get("last_modified"),
+            })
+    return synth
+
+
 def ingest_report(report: dict, conn: sqlite3.Connection, user_name: str = "") -> dict:
     """Upsert disks + delete/insert folder_tree je disk_uuid. Gibt Push-Payload zurück."""
     si = report.get("scan_info", {})
     uuid = _disk_uuid(report)
-    tree = report.get("folder_tree", [])
+    tree = _tree_from_report(report)
     name = Path(si.get("scanned_path", "")).name
     used = sum(n["size_bytes"] for n in tree if n.get("depth") == 1)
 
