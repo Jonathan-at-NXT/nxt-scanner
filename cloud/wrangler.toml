@@ -1,0 +1,13 @@
+# NXT Scanner Ingest-Worker
+# Enthaelt NUR nicht-geheime IDs. Der Ingest-Token ist ein CF-Secret
+# (wrangler secret put INGEST_TOKEN) und liegt NIE im Repo.
+
+name = "nxt-scanner-ingest"
+main = "src/index.js"
+compatibility_date = "2026-07-24"
+account_id = "46b4ead777c6a2df24459b42e738f28f"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nxt-scanner"
+database_id = "82c8542a-1a97-481d-a0dd-1b8c4af9d4bd"
