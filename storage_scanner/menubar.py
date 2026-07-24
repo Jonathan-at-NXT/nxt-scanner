@@ -397,6 +397,9 @@ class StorageScannerApp(rumps.App):
             from .db import db_ingest_safe
             db_ingest_safe(str(report_path), user_name=self._user_name)
 
+            from .d1_client import push_safe
+            push_safe(str(report_path), user_name=self._user_name)
+
             self._scan_times[volume_name] = datetime.now().isoformat()
             self._save_scan_times()
             self._fail_counts.pop(volume_name, None)

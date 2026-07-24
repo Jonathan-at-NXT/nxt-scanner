@@ -69,19 +69,28 @@ def _tree_from_report(report: dict) -> list[dict]:
     return synth
 
 
-def ingest_report(report: dict, conn: sqlite3.Connection, user_name: str = "") -> dict:
-    """Upsert disks + delete/insert folder_tree je disk_uuid. Gibt Push-Payload zurück."""
+def build_payload(report: dict, user_name: str = "") -> dict:
+    """Baut das Push-Payload {disk, folder_tree} aus einem Report — ohne DB.
+    Von ingest_report und d1_client gemeinsam genutzt."""
     si = report.get("scan_info", {})
     uuid = _disk_uuid(report)
     tree = _tree_from_report(report)
     name = Path(si.get("scanned_path", "")).name
     used = sum(n["size_bytes"] for n in tree if n.get("depth") == 1)
-
     disk_row = {
         "uuid": uuid, "name": name, "fs_type": None, "is_network": None,
         "used_bytes": used, "capacity_bytes": None,
         "last_scan": si.get("scan_date"), "last_user": user_name or None,
     }
+    return {"disk": disk_row, "folder_tree": tree}
+
+
+def ingest_report(report: dict, conn: sqlite3.Connection, user_name: str = "") -> dict:
+    """Upsert disks + delete/insert folder_tree je disk_uuid. Gibt Push-Payload zurück."""
+    payload = build_payload(report, user_name=user_name)
+    disk_row = payload["disk"]
+    uuid = disk_row["uuid"]
+    tree = payload["folder_tree"]
 
     with conn:
         conn.execute(
