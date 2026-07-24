@@ -1,0 +1,14 @@
+{
+  "name": "nxt-scanner-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "schema": "wrangler d1 execute nxt-scanner --file=./schema.sql --remote",
+    "schema:local": "wrangler d1 execute nxt-scanner --file=./schema.sql --local"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

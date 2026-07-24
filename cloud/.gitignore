@@ -1,0 +1,10 @@
+# Secrets & lokale Wrangler-Artefakte — NIE committen
+.dev.vars
+.dev.vars.*
+.wrangler/
+node_modules/
+*.log
+# Falls jemand versehentlich Tokens ablegt:
+*secret*
+*.token
+tmp*.sql

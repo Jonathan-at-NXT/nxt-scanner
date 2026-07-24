@@ -28,6 +28,8 @@ a = Analysis(
         'storage_scanner.paths',
         'storage_scanner.updater',
         'storage_scanner.admin',
+        'storage_scanner.db',
+        'storage_scanner.d1_client',
         # rumps
         'rumps',
         # PyObjC

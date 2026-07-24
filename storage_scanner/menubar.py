@@ -25,6 +25,9 @@ from .updater import check_for_update, install_update
 
 RESCAN_INTERVAL_SECONDS = 3600  # 1 Stunde
 
+# Nicht geheim (nur die URL) — der Token wird manuell eingetragen, nie im Repo/Build.
+DEFAULT_D1_INGEST_URL = "https://nxt-scanner-ingest.nxtstudios.workers.dev"
+
 IGNORED_VOLUMES = {"Macintosh HD", "Macintosh HD - Data", "Recovery", "Preboot", "VM", "Update"}
 
 AUTO_SCAN_PATTERNS = [
@@ -95,6 +98,7 @@ class StorageScannerApp(rumps.App):
         self.analysis_item = rumps.MenuItem("Auswertung starten", callback=self.start_analysis)
         self._analysis_busy = False
         self.fullfilment_item = rumps.MenuItem("Fullfilment Sync", callback=self.start_fullfilment_sync)
+        self.d1_item = rumps.MenuItem("D1-Sync einrichten...", callback=self.change_d1_settings)
         self._fullfilment_busy = False
         self.version_item = rumps.MenuItem(f"Version {__version__}")
         self.update_item = rumps.MenuItem("Auf Updates prüfen...", callback=self._on_update_click)
@@ -119,6 +123,7 @@ class StorageScannerApp(rumps.App):
         if self._admin_mode:
             menu_items.append(self.analysis_item)
             menu_items.append(self.fullfilment_item)
+            menu_items.append(self.d1_item)
         menu_items.extend([
             None,
             self.version_item,
@@ -148,6 +153,47 @@ class StorageScannerApp(rumps.App):
             config["user_name"] = self._user_name
             save_config(config)
             self.name_item.title = f"Angemeldet als: {self._user_name}"
+
+    # ── D1-Sync Einstellungen ───────────────────────────────────────
+
+    def change_d1_settings(self, _):
+        config = load_config()
+
+        # URL (nicht geheim) – Default vorausgefüllt, selten zu ändern
+        response = rumps.Window(
+            message="D1 Ingest-Worker URL:",
+            title="D1-Sync (1/2)",
+            default_text=config.get("d1_ingest_url", DEFAULT_D1_INGEST_URL),
+            ok="Weiter",
+            cancel="Abbrechen",
+            dimensions=(400, 24),
+        ).run()
+        if not response.clicked:
+            return
+        url = response.text.strip()
+
+        # Token (geheim) – wird nur lokal gespeichert, nie im Repo/Build
+        response = rumps.Window(
+            message="D1 Ingest-Token (Bearer):\n(bekommst du per DM / Passwort-Manager)",
+            title="D1-Sync (2/2)",
+            default_text=config.get("d1_token", ""),
+            ok="Speichern",
+            cancel="Abbrechen",
+            dimensions=(400, 24),
+        ).run()
+        if not response.clicked:
+            return
+        token = response.text.strip()
+
+        if not url or not token:
+            rumps.notification("NXT Storage Scanner", "", "URL und Token dürfen nicht leer sein.")
+            return
+
+        config["d1_ingest_url"] = url
+        config["d1_token"] = token
+        save_config(config)
+        rumps.notification("NXT Storage Scanner", "D1-Sync aktiv",
+                           "Der nächste Scan wird zusätzlich zentral gesichert.")
 
     # ── Notion Einstellungen ────────────────────────────────────────
 
@@ -394,6 +440,12 @@ class StorageScannerApp(rumps.App):
             run_scan(volume_path, str(report_path))
             run_sync(str(report_path))
 
+            from .db import db_ingest_safe
+            db_ingest_safe(str(report_path), user_name=self._user_name)
+
+            from .d1_client import push_safe
+            push_safe(str(report_path), user_name=self._user_name)
+
             self._scan_times[volume_name] = datetime.now().isoformat()
             self._save_scan_times()
             self._fail_counts.pop(volume_name, None)
@@ -454,9 +506,34 @@ class StorageScannerApp(rumps.App):
     def _do_analysis(self):
         from .notion_sync import run_analysis
         try:
-            run_analysis()
-            self._log("Auswertung abgeschlossen")
-            rumps.notification("NXT Storage Scanner", "Auswertung fertig", "Projekte + Log aktualisiert")
+            summary = run_analysis()
+            excess = summary["excess_copies_gb"]
+            excess_n = summary["excess_copies_count"]
+            missing = summary["missing_backup_count"]
+            missing_gb = summary["missing_backup_gb"]
+            mismatch = summary["mismatch_count"]
+            total = summary["total_projects"]
+
+            log_parts = [f"{total} Projekte"]
+            if excess_n:
+                log_parts.append(f"{excess:.0f} GB Einspar-Potential ({excess_n} überzählige Kopien)")
+            if missing:
+                log_parts.append(f"{missing} ohne Backup ({missing_gb:.0f} GB)")
+            if mismatch:
+                log_parts.append(f"{mismatch} Mismatches")
+            self._log(f"Auswertung: {', '.join(log_parts)}")
+
+            # Notification mit Zusammenfassung
+            lines = [f"{total} Projekte ausgewertet"]
+            if excess_n:
+                lines.append(f"📦 {excess:.0f} GB Einspar-Potential ({excess_n} überzählige Kopien)")
+            if missing:
+                lines.append(f"⚠️ {missing} Ordner ohne Backup ({missing_gb:.0f} GB)")
+            if mismatch:
+                lines.append(f"🔀 {mismatch} Size-Mismatches")
+            if not excess_n and not missing and not mismatch:
+                lines.append("Alles sauber!")
+            rumps.notification("NXT Storage Scanner", "Auswertung fertig", "\n".join(lines))
         except Exception as e:
             self._log(f"FEHLER bei Auswertung: {str(e).strip()[:200]}")
             rumps.notification("NXT Storage Scanner", "Auswertung fehlgeschlagen", str(e)[:100])

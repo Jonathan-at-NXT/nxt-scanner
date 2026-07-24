@@ -7,6 +7,8 @@ die CLI-Aufrufe fehlschlagen.
 
 import os
 import subprocess
+from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 
@@ -102,3 +104,102 @@ def _scan_recursive(path: str, size_ref: list[int], count_ref: list[int]) -> Non
                     continue
     except (PermissionError, OSError):
         pass
+
+
+def is_network_volume(path: str) -> bool:
+    """True wenn der Mount ein Netzlaufwerk ist (smbfs/nfs/afpfs/webdav)."""
+    try:
+        mr = subprocess.run(["mount"], capture_output=True, text=True, timeout=10)
+        target = str(path).rstrip("/")
+        for line in mr.stdout.splitlines():
+            # Format: <src> on <mountpoint> (<fstype>, ...)
+            if f" on {target} " in line or f" on {target}/" in line:
+                return any(fs in line for fs in ("smbfs", "nfs", "afpfs", "webdav"))
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return False
+
+
+def _safe_iso_mtime(p: str) -> str:
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(p)).isoformat()
+    except OSError:
+        return datetime.now().isoformat()
+
+
+def walk_tree(root, sub_depth: int = 2, timeout: int = 180) -> list[dict]:
+    """Erfasst den Ordnerbaum ab root bis sub_depth Ebenen (kumulativ).
+
+    depth 0 == root selbst (rel_path ""). Größen via 'du -d', Dateizahlen via
+    'find'. Größen/Dateizahlen sind kumulativ (ganzer Teilbaum). Leere Liste bei
+    Timeout/Fehler.
+    """
+    root = Path(root)
+    root_str = os.path.normpath(str(root))
+
+    # 1) Größen je Knoten bis sub_depth (BSD du: -d Tiefe, -k KiB)
+    sizes = {}
+    try:
+        r = subprocess.run(
+            ["du", "-d", str(sub_depth), "-k", root_str],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if r.stderr and "Invalid argument" in r.stderr:
+            return []
+        for line in r.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 2:
+                continue
+            kb, p = parts
+            try:
+                sizes[os.path.normpath(p)] = int(kb) * 1024
+            except ValueError:
+                continue
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+
+    if root_str not in sizes:
+        return []
+
+    # 2) Dateizahlen kumulativ je Knoten (find -> Vorfahren bis sub_depth zählen)
+    counts = defaultdict(int)
+    find_proc = None
+    try:
+        find_proc = subprocess.Popen(
+            ["find", root_str, "-type", "f"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+        for bline in find_proc.stdout:
+            fpath = os.path.normpath(bline.decode("utf-8", "replace").rstrip("\n"))
+            d = os.path.dirname(fpath)
+            rel = os.path.relpath(d, root_str)
+            parts = [] if rel == "." else rel.split(os.sep)
+            counts[root_str] += 1
+            acc = root_str
+            for seg in parts[:sub_depth]:
+                acc = os.path.join(acc, seg)
+                counts[acc] += 1
+        find_proc.wait(timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        if find_proc is not None:
+            try:
+                find_proc.kill()
+            except OSError:
+                pass
+
+    # 3) Knoten bauen
+    nodes = []
+    for abspath, size in sizes.items():
+        rel = os.path.relpath(abspath, root_str)
+        rel = "" if rel == "." else rel.replace(os.sep, "/")
+        depth = 0 if rel == "" else rel.count("/") + 1
+        parent = None if depth == 0 else "/".join(rel.split("/")[:-1])
+        nodes.append({
+            "rel_path": rel,
+            "depth": depth,
+            "parent_rel_path": parent,
+            "size_bytes": size,
+            "file_count": counts.get(abspath, 0),
+            "mtime": _safe_iso_mtime(abspath),
+        })
+    return nodes

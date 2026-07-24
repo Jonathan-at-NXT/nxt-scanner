@@ -464,6 +464,7 @@ def _migrate_basic_schema(hdd_db_id: str, projects_db_id: str) -> None:
                 "Status": {"select": {"options": [
                     {"name": "Manuell", "color": "blue"},
                 ]}},
+                "Soll-Name": {"rich_text": {}},
             }
         })
     except httpx.HTTPStatusError:
@@ -496,6 +497,7 @@ def _migrate_admin_schema(hdd_db_id: str, aggregated_db_id: str, log_db_id: str)
                         {"name": "MISSING_BACKUP", "color": "red"},
                         {"name": "INCOMPLETE_BACKUP", "color": "orange"},
                         {"name": "EXCESS_COPIES", "color": "gray"},
+                        {"name": "UMBENENNEN", "color": "blue"},
                     ]}},
                 }
             })
@@ -869,13 +871,9 @@ def sync_aggregated_projects(
     Returns:
         Liste der Projektgruppen für Mismatch-Analyse.
     """
-    # 1. Alle Valid + Manuell-Einträge aus Speicherungen laden
-    all_entries = query_database(projects_db_id, {
-        "or": [
-            {"property": "Status", "select": {"equals": "Valid"}},
-            {"property": "Status", "select": {"equals": "Manuell"}},
-        ],
-    })
+    # 1. Alle Valid + Manuell + Unassigned-Einträge aus Speicherungen laden
+    #    (Unassigned werden nur berücksichtigt wenn sie einen Soll-Namen haben)
+    all_entries = query_database(projects_db_id)
 
     # 2. Alle HDD-Seiten laden (für Name-Lookup)
     hdd_pages = query_database(hdd_db_id)
@@ -894,9 +892,17 @@ def sync_aggregated_projects(
             existing_map[title[0]["plain_text"]] = page["id"]
 
     # 4. Nach Aggregations-Key gruppieren (Datum_Projektname)
+    #    Unassigned-Einträge mit Soll-Name: Soll-Name wird geparst und für
+    #    die Aggregation verwendet (Ordner auf der Platte bleibt unverändert).
+    from .rules import validate_folder
+
     groups = defaultdict(list)
     for entry in all_entries:
         props = entry["properties"]
+
+        # Status prüfen
+        status_prop = props.get("Status", {}).get("select")
+        status = status_prop["name"] if status_prop else None
 
         # Datum extrahieren
         date_prop = props.get("Datum", {}).get("date")
@@ -909,6 +915,34 @@ def sync_aggregated_projects(
         # Typ extrahieren
         type_prop = props.get("Typ", {}).get("select")
         folder_type = type_prop["name"] if type_prop else None
+
+        # Soll-Name: wenn gesetzt, daraus Datum/Projektname/Typ ableiten
+        soll_parts = props.get("Soll-Name", {}).get("rich_text", [])
+        soll_name = soll_parts[0]["plain_text"].strip() if soll_parts else ""
+
+        if soll_name:
+            parsed = validate_folder(soll_name)
+            if parsed:
+                date_str = parsed["date"]
+                project_name = parsed["project_name"]
+                folder_type = parsed["type"]
+
+                # Unassigned mit gültigem Soll-Name: Felder übernehmen + Status auf Manuell
+                if status == "Unassigned":
+                    update_props = {
+                        "Projektname": {"rich_text": [{"text": {"content": project_name}}]},
+                        "Datum": {"date": {"start": date_str}},
+                        "Status": {"select": {"name": "Manuell"}},
+                    }
+                    if folder_type:
+                        update_props["Typ"] = {"select": {"name": folder_type}}
+                    api_patch(f"pages/{entry['id']}", {"properties": update_props})
+                    status = "Manuell"
+                    print(f"  Soll-Name übernommen: {soll_name}")
+
+        # Unassigned ohne Soll-Name und ohne manuelle Zuordnung: überspringen
+        if status == "Unassigned" and not soll_name:
+            continue
 
         # Größe extrahieren
         size_gb = props.get("Größe (GB)", {}).get("number", 0) or 0
@@ -925,6 +959,10 @@ def sync_aggregated_projects(
         if not date_str or not project_name:
             continue
 
+        # Echter Ordnername aus Titel
+        title_parts = props.get("Name", {}).get("title", [])
+        real_name = title_parts[0]["plain_text"] if title_parts else ""
+
         agg_key = f"{date_str}_{project_name}"
         groups[agg_key].append({
             "page_id": entry["id"],
@@ -935,6 +973,8 @@ def sync_aggregated_projects(
             "hdd_id": hdd_id,
             "hdd_name": hdd_name,
             "is_child": is_child,
+            "soll_name": soll_name,
+            "real_name": real_name,
         })
 
     # 5. Aggregierte Zeilen upserten
@@ -1011,12 +1051,13 @@ def sync_log(
     project_groups: list[dict],
     scan_date: str,
 ) -> None:
-    """Erstellt/aktualisiert Log-Einträge für alle 4 Log-Typen.
+    """Erstellt/aktualisiert Log-Einträge für alle 5 Log-Typen.
 
     - MISSING_BACKUP (Kritisch): Ordnertyp nur auf 1 HDD
     - SIZE_MISMATCH (Warnung): Gleicher Typ, verschiedene Größen
     - INCOMPLETE_BACKUP (Warnung): HDD hat Projekt aber nicht alle Typen
     - EXCESS_COPIES (Info): Ordnertyp auf 3+ HDDs
+    - UMBENENNEN (Info): Ordner hat Soll-Name, der vom echten Namen abweicht
     """
     # Bestehende Log-Einträge laden
     existing_logs = query_database(log_db_id)
@@ -1032,15 +1073,20 @@ def sync_log(
     # Aggregierte Projekt-Seiten für Relation-Lookup laden
     agg_pages = query_database(aggregated_db_id)
     agg_page_map = {}
+    agg_sicherung = {}
     for page in agg_pages:
         title = page["properties"]["Name"]["title"]
         if title:
-            agg_page_map[title[0]["plain_text"]] = page["id"]
+            name = title[0]["plain_text"]
+            agg_page_map[name] = page["id"]
+            sich_prop = page["properties"].get("Sicherung", {}).get("select")
+            agg_sicherung[name] = sich_prop["name"] if sich_prop else None
 
     for group in project_groups:
         agg_key = group["agg_key"]
         entries = group["entries"]
         agg_page_id = agg_page_map.get(agg_key)
+        sicherung = agg_sicherung.get(agg_key)
 
         # Nach Typ gruppieren
         by_type = defaultdict(list)
@@ -1060,11 +1106,12 @@ def sync_log(
             return sorted(set(e["hdd_id"] for e in type_entries if e["hdd_id"]))
 
         # 1. MISSING_BACKUP — Typ nur auf 1 HDD
+        #    Übersprungen wenn Sicherung = "Löschbar" oder "Einfach sichern"
         for type_name, type_entries in by_type.items():
             unique_hdds = set(e["hdd_name"] for e in type_entries if e["hdd_name"])
             log_name = f"MISSING_BACKUP: {agg_key} {type_name}"
 
-            if len(unique_hdds) < 2:
+            if len(unique_hdds) < 2 and sicherung not in ("Löschbar", "Einfach sichern"):
                 entry = type_entries[0]
                 size_str = f"{entry['size_gb']} GB"
                 hdd_name = next(iter(unique_hdds)) if unique_hdds else "?"
@@ -1150,6 +1197,25 @@ def sync_log(
             else:
                 _resolve_log_entry(log_map, log_name, scan_date)
 
+        # 5. UMBENENNEN — Ordner mit Soll-Name der vom echten Namen abweicht
+        for e in entries:
+            if not e.get("soll_name"):
+                continue
+            log_name = f"UMBENENNEN: {e['real_name']} → {e['soll_name']}"
+
+            if e["real_name"] != e["soll_name"]:
+                details = f"Ist: {e['real_name']}\nSoll: {e['soll_name']}\nDatenträger: {e['hdd_name']}"
+                hdd_ids = [e["hdd_id"]] if e["hdd_id"] else []
+                _upsert_log_entry(
+                    log_db_id, log_map, log_name,
+                    log_type="UMBENENNEN", priority="Info",
+                    details=details, hdd_ids=hdd_ids,
+                    scan_date=scan_date, agg_page_id=agg_page_id,
+                )
+            else:
+                # Name stimmt jetzt überein → resolved
+                _resolve_log_entry(log_map, log_name, scan_date)
+
 
 # ── Main ────────────────────────────────────────────────────────────
 
@@ -1225,11 +1291,14 @@ def run_sync(report_path: str) -> None:
     sync_projects(projects_db_id, report, hdd_page_id, scan_date)
 
 
-def run_analysis() -> None:
+def run_analysis() -> dict:
     """Führt nur die Aggregation + Mismatch-Log-Analyse aus (ohne Scan).
 
     Liest alle Daten aus den bestehenden Notion-Datenbanken und aktualisiert
     die Projekte-Übersicht sowie das Log. Wird manuell über das Menü ausgelöst.
+
+    Returns:
+        Dict mit Zusammenfassung: excess_copies_gb, missing_backup_count, etc.
     """
     from datetime import date
 
@@ -1239,7 +1308,66 @@ def run_analysis() -> None:
     project_groups = sync_aggregated_projects(aggregated_db_id, projects_db_id, hdd_db_id, scan_date)
     sync_log(log_db_id, aggregated_db_id, project_groups, scan_date)
 
+    # Zusammenfassung berechnen
+    summary = _compute_analysis_summary(project_groups, log_db_id)
+
     print("\nAuswertung abgeschlossen!")
+    return summary
+
+
+def _compute_analysis_summary(project_groups: list[dict], log_db_id: str) -> dict:
+    """Berechnet Einspar-Potential und Risiken aus den Projektgruppen.
+
+    Returns:
+        Dict mit:
+        - excess_copies_gb: GB die durch 3+ Kopien eingespart werden könnten
+        - excess_copies_count: Anzahl Ordner mit 3+ Kopien
+        - missing_backup_count: Anzahl Ordner ohne Backup (nur 1 Kopie)
+        - missing_backup_gb: GB ohne Backup
+        - mismatch_count: Anzahl Projekte mit Size-Mismatch
+        - total_projects: Anzahl Projekte gesamt
+    """
+    excess_gb = 0.0
+    excess_count = 0
+    missing_count = 0
+    missing_gb = 0.0
+    mismatch_count = 0
+
+    for group in project_groups:
+        entries = group["entries"]
+        if group["has_mismatch"]:
+            mismatch_count += 1
+
+        # Nach Typ gruppieren
+        by_type = defaultdict(list)
+        for e in entries:
+            if e["type"]:
+                by_type[e["type"]].append(e)
+
+        for type_name, type_entries in by_type.items():
+            unique_hdds = set(e["hdd_id"] for e in type_entries if e["hdd_id"])
+            sizes = [e["size_gb"] for e in type_entries]
+
+            if len(unique_hdds) >= 3:
+                # Einspar-Potential: alles über 2 Kopien
+                extra_copies = len(unique_hdds) - 2
+                avg_size = sum(sizes) / len(sizes) if sizes else 0
+                excess_gb += avg_size * extra_copies
+                excess_count += extra_copies
+
+            if len(unique_hdds) < 2:
+                # Nur 1 Kopie = kein Backup
+                missing_count += 1
+                missing_gb += sum(sizes)
+
+    return {
+        "excess_copies_gb": round(excess_gb, 1),
+        "excess_copies_count": excess_count,
+        "missing_backup_count": missing_count,
+        "missing_backup_gb": round(missing_gb, 1),
+        "mismatch_count": mismatch_count,
+        "total_projects": len(project_groups),
+    }
 
 
 if __name__ == "__main__":
