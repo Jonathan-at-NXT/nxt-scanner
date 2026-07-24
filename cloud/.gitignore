@@ -7,3 +7,4 @@ node_modules/
 # Falls jemand versehentlich Tokens ablegt:
 *secret*
 *.token
+tmp*.sql
