@@ -7,6 +7,10 @@ main = "src/index.js"
 compatibility_date = "2026-07-24"
 account_id = "46b4ead777c6a2df24459b42e738f28f"
 
+[vars]
+# Nicht geheim: Notion Datenträger-DB-ID. Der Notion-Token ist ein CF-Secret.
+HDD_DB_ID = "31b8ae70-295b-811b-b0c9-daa586563078"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "nxt-scanner"
