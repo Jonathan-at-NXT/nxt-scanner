@@ -1,14 +1,37 @@
-# Automatisierte Speicherverwaltung — Design-Spec
+# Automatisierte Speicherverwaltung — Design-Spec (v2)
 
 **Datum:** 2026-07-27
 **Status:** Design zur Review (Umsetzung startet mit Phase 1 nach Freigabe)
+**v2-Änderung:** 3-Schicht-Architektur mit menschlicher **Kontext-Schicht**
+(kuratierter Confirm-Loop); gestuftes Datenmodell; Manager-Mac mit 3 USB-C.
 
 ## Vision
 
 Jonathan steckt nur die Platte(n) an, die das System ihm nennt (Push aufs Handy),
 und das System sorgt dafür, dass **jedes Projekt genau 2× gesichert** ist — mit
 einer belastbaren **Datenverlust-Garantie** über alle eigenen Operationen. Läuft
-als Hintergrund-Daemon auf einem dauerhaft laufenden Mac.
+als Hintergrund-Daemon auf einem dedizierten Manager-Mac (Jonathans alter MacBook,
+3 USB-C-Ports).
+
+## Warum drei Schichten (Kernerkenntnis)
+
+Reine Daten (Größen, Dateizahlen, Hashes) können drei Dinge **grundsätzlich nicht**
+— belegt durch die KTM/GIROCARD-Analyse:
+1. **Identität & Beziehungen** — „MAIN FILM ist Teil der ORANGE-BLOOD-Kampagne";
+   „`2024-10-30_GIROCARD 1` und `GIROCARD 1` sind dasselbe".
+2. **Wichtigkeit & Disposition** — kritisch (2×) vs. Müll/löschbar (`_KILL`,
+   `_TO CHECK`, `DROPBOXSYNC`) vs. Archiv (1× ok).
+3. **Physische Welt** — „es gibt eine Backup-Platte, die nie gescannt wurde";
+   „diese Platte ist tot/offsite".
+
+Deshalb ist **menschlicher Kontext erstklassiger Systembestandteil**, kein
+Nachgedanke.
+
+```
+Schicht 1: DATEN        (Größen/Metadaten/Hashes)     — beweist Sicherheit
+Schicht 2: KONTEXT      (menschlich, kuratiert)        — liefert Identität/Wichtigkeit/Beziehung
+Schicht 3: ENTSCHEIDUNG (Planer + Executor)            — plant & führt aus
+```
 
 ## Die Garantie (präzise)
 
@@ -18,164 +41,192 @@ sondern eine **Invariante über alle Operationen des Systems**:
 > **INV-1:** Keine Operation reduziert je die Zahl gesunder, lesbarer Kopien eines
 > Ordners unter 2. Ist der Ist-Stand < 2, wird nur erhöht, nie gesenkt.
 >
-> **INV-2:** Gelöscht wird ausschließlich, wenn **≥ 2 inhaltlich verifizierte
-> Kopien auf zwei physisch verschiedenen Datenträgern** (verschiedene Volume-UUID)
-> **jetzt lesbar** vorliegen.
+> **INV-2:** Gelöscht wird ausschließlich, wenn **≥ 2 inhaltlich (per Hash)
+> verifizierte Kopien auf zwei physisch verschiedenen Datenträgern** jetzt lesbar
+> vorliegen.
 >
 > **INV-3:** Jede Operation ist **journaled** (durable) *vor* Ausführung und
-> **resumierbar/idempotent**. Ein Abbruch (Strom, Abziehen) hinterlässt nie einen
-> Zustand, der INV-1/INV-2 verletzt.
+> **resumierbar/idempotent**. Ein Abbruch verletzt nie INV-1/INV-2.
+>
+> **INV-4 (Kontext-Sicherheit):** Menschlicher Kontext darf **Intention und
+> Priorität** steuern (z. B. „nie unter 2×", „prüfen vor Löschen"), aber **niemals
+> das Löschen einer einzigen bewiesenen Kopie autorisieren**. Lösch-Sicherheit ist
+> **daten-bewiesen**, nicht label-gesteuert. Ein falsches menschliches Urteil kann
+> so nie Daten kosten.
 
-Daraus folgt die Betriebsregel **Copy → Verify → (erst dann) Delete**; niemals
-„move". Verifikation = **Inhalts-Hash-Vergleich**, nicht Größe/Name.
+Betriebsregel: **Copy → Verify → (erst dann) Delete.** Nie „move".
 
 ## Nicht-Ziele
 
-- Kein Schutz gegen physisches Sterben einer Platte, die die *einzige* Kopie hält.
-  Gegenmaßnahme: Einzelkopien werden **zuerst** dupliziert (Fenster minimieren).
-- Kein Cloud-Backup (rein lokale Datenträger-Flotte).
-- Kein Umbenennen/Aufräumen der Namenskonvention (separates Hygiene-Thema).
+- Kein Schutz gegen physisches Sterben der *einzigen* Kopie. Gegenmaßnahme:
+  Einzelkopien zuerst duplizieren (Fenster minimieren).
+- Kein Cloud-Backup (lokale Flotte).
+- Kein automatisches Umbenennen (Namenskonvention = separates Hygiene-Thema;
+  Aliase werden im Kontext gepflegt, nicht durch Umbenennen erzwungen).
 
-## Kernentscheidung: Content-Fingerprinting als Fundament
+## Schicht 1 — Daten (gestuftes Modell)
 
-Namens-/Datums-Matching ist fragil (Beleg: KTM MAIN FILM — eine anders benannte
-oder unklassifizierte 2. Kopie wäre unauffindbar). Deshalb wird **Projekt-Identität
-über Inhalt** definiert:
+Genau so tief wie nötig, nicht tiefer. Drei Stufen, aufsteigender Aufwand:
 
-- **Datei-Hash:** BLAKE3 (oder SHA-256) je Datei.
-- **Ordner-Manifest:** sortierte Liste `(rel_path, size, mtime, hash)` je Top-Level-
-  Ordner; daraus ein **gerollter Manifest-Hash** (Merkle-Wurzel).
-- Zwei Ordner sind **dieselben Daten**, wenn ihr Manifest-Hash gleich ist — egal
-  wie sie heißen, wo sie liegen, welches Datum im Namen steht.
-- **Teil-Identität** (eine Kopie hat Untermenge/Obermenge): über Datei-Hash-
-  Schnittmengen erkennbar → findet „leere/kaputte" Kopien exakt.
+| Stufe | Kosten | Beantwortet | Wo gespeichert |
+|---|---|---|---|
+| **1 Ordner-Aggregate** (haben wir) | gratis | „gibt's eine Ganz-Ordner-Kopie?" | lokal + D1 |
+| **2 Datei-Metadaten-Manifest** (Pfad, Größe, mtime je Datei) | billig — Verzeichnis-Walk, **kein** Byte-Lesen | Teilmenge/Umgruppierung (MAIN-FILM-in-ORANGE-BLOOD), ~99 % sicher | **lokal voll**, Digest → D1 |
+| **3 Content-Hashes** (BLAKE3/SHA-256 je Datei) | teuer (alle Bytes lesen) | Byte-Identität, **Pflicht nur vor Löschung** | lokal, on-demand |
 
-Das ersetzt die Fuzzy-Cluster-Logik für alle sicherheitsrelevanten Entscheidungen.
-Fuzzy-Namensmatching bleibt nur als *Hinweisgeber* fürs Reporting.
+**Optimierung:** Stufe 2 **blanket** (schnell, ganze Flotte, neuer Scan-Standard);
+Stufe 3 **nur punktuell** vor einer Löschung (die 2 Überlebenden gegen-hashen).
+Es müssen **nie** 480 TB blind gehasht werden.
 
-## Architektur — 5 Bausteine
+**Manifest-Digest für D1:** volle Datei-Liste bleibt lokal auf dem Manager-Mac
+(SQLite, Millionen Zeilen sind unkritisch); nach D1 geht nur ein kompakter Digest
+je Ordner (Datei-Größen-Histogramm-Hash + count + total) — D1 bleibt schlank.
 
+**Matching-Stufen (namensunabhängig):**
+- **Strukturell (Stufe 1/2):** zwei Ordner = gleiche Daten, wenn Gesamtgröße ±1 %
+  UND Dateizahl ±2 % (Union-Find-Clustering). Löst GIROCARD-Aliase, ORANGE-BLOOD-
+  Dopplung. Teilmengen über Datei-Größen-Multimengen (Stufe 2).
+- **Beweis (Stufe 3):** identischer Content-Hash = byte-identisch. Nur vor Delete.
+
+## Schicht 2 — Menschlicher Kontext (kuratierter Confirm-Loop)
+
+Eine **Wissensbasis**, die nicht aus Ordnern ableitbar ist, kuratiert aufgebaut:
+
+- **Projekt-Identität:** kanonisches Projekt → Aliase (`GIROCARD 1` ≡
+  `2024-10-30_GIROCARD 1`).
+- **Beziehungen:** Kampagne ⊃ Teilstücke (ORANGE BLOOD ⊃ MAIN FILM) — wichtig, weil
+  „ist gesichert" auf Kampagnenebene ≠ auf Teilstück-Ebene.
+- **Disposition** je Projekt: `2x-kritisch` / `archiv-1x` / `löschbar` / `prüfen`.
+- **Flotten-Fakten:** existierende, aber ungescannte Platten (offsite/Backup); tote
+  Platten; Sonderrollen.
+
+**Mechanismus — Suggest → Confirm:** Das System bildet aus Schicht-1-Daten eine
+**Vermutung** und legt sie dem Menschen vor; der bestätigt/korrigiert per Klick;
+die Antwort wird Ground Truth und fließt in alle folgenden Entscheidungen.
+Beispiele:
+- „`GIROCARD 1` und `2024-10-30_GIROCARD 1` (beide 4724 GB) sind dasselbe Projekt?"
+  → [Ja] [Nein] [gehören zusammen als …]
+- „MAIN FILM (2,6 TB, nur Tower 6) ist eigenständig — als `2x-kritisch` markieren?"
+- „`_KILL` (7,6 TB) als `löschbar` markieren?"
+
+**UI: gehostete, kollaborative Team-Website** (Worker + D1, wie der `/rollout`-View,
+aber interaktiv mit Schreib-Endpunkten). **Jeder im Team** kann kuratieren, nicht
+nur Jonathan:
+- **Matchen:** „diese 2 Einträge gehören zusammen" (Alias/Beziehung setzen).
+- **Ergänzen:** „das hier lässt sich mit diesem ergänzen" (Teilstück ↔ Kampagne).
+- **Disposition:** „das braucht nur 1× gesichert" / „2×-kritisch" / „löschbar".
+- **Kommentieren:** freie Notizen je Projekt/Match („Rohmaterial liegt offsite bei
+  X", „Kunde will Rohdaten behalten").
+
+**Multi-User & nachvollziehbar:** jede Entscheidung und jeder Kommentar trägt
+**Autor + Zeit**; Änderungen sind versioniert (Audit-Trail). Schreibzugriff über
+Team-Auth (Token/Login); Lesen wie beim Rollout-View. Die Wissensbasis wird so ein
+**gemeinsames, lebendes Team-Artefakt** statt Einzelwissen — der bisher flüchtige
+Chat-Loop mit Claude wird dauerhaft festgehalten.
+
+**Claude als Kontext-Brücke:** sobald der Kontext strukturiert vorliegt, kann das
+LLM die unscharfen Schlüsse ziehen, die der deterministische Matcher nicht kann —
+und **Vermutungen für die Team-Website erzeugen** („diese beiden 4724-GB-Ordner
+sind vermutlich dasselbe — bestätigen?"), die das Team dann bestätigt/korrigiert.
+
+**Sicherheit:** Kontext steuert Intention/Priorität, nie Datenverlust (INV-4).
+
+## Schicht 3 — Entscheidung (Planer + Executor)
+
+### Planer
+- Eingaben: Matching-Ergebnis (Schicht 1) + Kontext (Schicht 2: Aliase,
+  Beziehungen, Disposition) + Plattenkapazitäten.
+- Zielzustand: jedes Projekt mit Disposition `2x-kritisch`/(default) **genau 2×**
+  auf 2 verschiedenen Platten; `archiv-1x` → 1×; `löschbar` → Vorschlag zum Löschen
+  (nie automatisch); `prüfen` → blockiert, bis Mensch entscheidet.
+- **Priorität 1 (Sicherheit):** alle 1-Kopie-Projekte auf 2 bringen — *vor* jeder
+  Löschung. Prio 2: Überschuss (>2) auf 2 reduzieren. Prio 3: Konsolidieren.
+- **Wechsel-Optimierung:** minimiert Anstecken/Abziehen; mit 3 USB-C-Ports lassen
+  sich Quelle + Ziel + Hub gleichzeitig mounten → viele Operationen pro Plattensatz.
+- Ausgabe: geordnete **Session-Liste**, immer erst als **Dry-Run** einsehbar.
+
+### Sicherer Executor
+Zustandsautomat je Operation (Journal, lokal + D1-Spiegel):
 ```
-[1 Fingerprinting]  beim Anstecken: hasht jeden Top-Level-Ordner (read-only)
-        │  Manifest je Ordner -> lokale DB + D1
-        ▼
-[2 Identitäts-Index] gruppiert Ordner nach Manifest-Hash (echte Kopien-Zahl)
-        │
-        ▼
-[3 Planer]  Ziel: jedes Projekt genau 2×. Reihenfolge: erst Einzelkopien sichern,
-        │   dann Überschuss löschen. Optimiert Platten-Wechsel-Sequenz. Kapazität.
-        ▼
-[4 Executor]  Copy→Verify→Delete-Zustandsautomat, journaled, resumierbar (rsync +
-        │   unabhängige Re-Hash-Verifikation). Dry-Run + Freigabe pro Session.
-        ▼
-[5 Daemon + Push]  launchd-Dienst, Mount-Watch; Handy-Push „stecke Platte X an";
-            Live-Control-Panel (wie Rollout-View).
-```
-
-### Baustein 1 — Fingerprinting (Phase 1, read-only, Start)
-
-- Erweiterung des bestehenden Scanners (`storage_scanner`). Neuer Modul
-  `fingerprint.py`: berechnet je Top-Level-Ordner das Manifest.
-- **Inkrementell & resumierbar:** Datei wird nur neu gehasht, wenn `(size, mtime)`
-  sich änderte (Cache in DB). Abbruch-sicher: pro Datei committen.
-- **Performance:** BLAKE3 (mehrere GB/s); paralleles Lesen begrenzt (HDD: seriell,
-  SSD: parallel). Netzlaufwerke: optional überspringen (zu langsam).
-- Ergebnis geht in neue Tabellen (lokal + D1): `file_hashes`, `folder_manifest`.
-
-### Baustein 2 — Identitäts-Index
-
-- Query: gruppiere `folder_manifest.manifest_hash` → Kopienzahl je Inhalt.
-- Erkennt exakt: 0/1/2/n Kopien, **Teilkopien** (Untermengen), **leere Hüllen**.
-- Löst die KTM-Frage endgültig: existiert derselbe Inhalt anderswo (beliebiger Name)?
-
-### Baustein 3 — Planer
-
-- Eingaben: Identitäts-Index, Plattenkapazitäten/Belegung, Plattenpaar-Constraints.
-- Zielzustand: jedes Manifest genau 2× auf 2 verschiedenen Platten.
-- **Priorität 1 (Sicherheit):** alle 1-Kopie-Ordner auf 2 bringen — *vor* jeder
-  Löschung. Priorität 2: Überschuss (>2) auf 2 reduzieren. Priorität 3: Konsolidieren.
-- **Wechsel-Optimierung:** minimiert Anzahl Anstecken/Abziehen (Mensch = Flaschenhals);
-  gruppiert alle Operationen, die mit einem gegebenen Plattensatz möglich sind.
-- Ausgabe: geordnete **Session-Liste** — je Session „stecke A (Quelle) + B (Ziel) an",
-  dann konkrete Copy/Delete-Schritte. Immer erst als **Dry-Run** einsehbar.
-
-### Baustein 4 — Sicherer Executor
-
-Zustandsautomat je geplanter Operation (im Journal, D1 + lokal gespiegelt):
-```
-PLANNED → COPYING → COPIED → VERIFYING → VERIFIED → (Quelle löschbar?) → DELETING → DONE
-                 └────── bei Fehler/Abbruch: zurück auf PLANNED, Ziel-Reste verwerfen
+PLANNED → COPYING → COPIED → VERIFYING → VERIFIED → (INV-2 erfüllt?) → DELETING → DONE
+        └── Fehler/Abbruch: zurück auf PLANNED, Ziel-Reste verwerfen ──┘
 ```
 - **Kopieren:** `rsync -a --partial` zwischen zwei gemounteten Volumes.
-- **Verifizieren:** *unabhängige* Re-Hash des Ziels, Vergleich mit Quell-Manifest
-  (nicht rsync vertrauen). Erst bei Match → VERIFIED.
-- **Löschen (INV-2):** nur wenn Ziel-Manifest == Quell-Manifest UND eine **zweite**
-  verifizierte Kopie auf anderer UUID existiert und lesbar ist. Löschung erst nach
-  expliziter Session-Freigabe; überzählige Kopien wandern zuerst in Status
-  `PENDING_DELETE` (nichts verschwindet ungefragt).
-- **Resume:** beim Start liest der Executor das Journal; unfertige Kopien werden per
-  Hash geprüft und fortgesetzt/neu gemacht; keine Löschung ohne erfüllte Vorbedingung.
-- **Abbruch/Abziehen mitten drin:** Ziel-Teilkopie ist nie „gut" (Hash-Mismatch) →
-  wird verworfen/fortgesetzt; Quelle bleibt unberührt bis VERIFIED.
-
-### Baustein 5 — Daemon, Push, Control-Panel
-
-- **Daemon:** launchd-Dienst (Muster wie bestehender Scanner), läuft 24/7 auf dem
-  neuen Mac. Reagiert auf Mount-Events, treibt den Plan, führt Sessions aus.
-- **Handy-Push:** wenn nächste Platte gebraucht wird → Push mit „Stecke *NXT 014*
-  an". Kanal: **ntfy.sh** / **Telegram-Bot** / **Pushover** (Entscheidung offen).
-- **Control-Panel:** Live-Seite (wie `/rollout`) — aktueller Plan, „nächste Platte",
-  Fortschritt je Session, Sicherheitsstatus, Historie.
+- **Verifizieren:** *unabhängige* Re-Hash (Stufe 3) des Ziels gegen Quell-Manifest —
+  nicht rsync vertrauen. Erst bei Match → VERIFIED.
+- **Löschen (INV-2 + INV-4):** nur wenn 2 hash-verifizierte Kopien auf 2 UUIDs
+  lesbar sind UND Disposition Löschen nicht verbietet. Überschuss wandert erst nach
+  `PENDING_DELETE`; endgültig gelöscht nur nach Session-Freigabe.
+- **Resume:** Journal beim Start lesen; unfertige Kopien per Hash prüfen/fortsetzen;
+  keine Löschung ohne erfüllte Vorbedingung.
 
 ## Hardware-Modell
 
-- **2-Bay-Dock + optionaler Hub:** zwei Platten gleichzeitig (Quelle + Ziel) für
-  direktes Kopieren; große Hub-Platte als Konsolidierungsziel.
-- Interne Mac-SSD **nicht** als Stage (zu klein); alle Kopien Volume→Volume.
-- Umschichten braucht Slack → ggf. 1–2 große Zielplatten als Puffer.
+- **Manager-Mac:** Jonathans alter MacBook, **3 USB-C-Ports**, läuft 24/7 als
+  Daemon. Jonathan arbeitet parallel am neuen Mac.
+- 3 Ports → **Quelle + Ziel + Hub gleichzeitig**; kaum Umstecken pro Kopie, Wechsel
+  nur beim Übergang zum nächsten Plattensatz.
+- Interne SSD nicht als Stage (zu klein); Kopien Volume→Volume.
+- Umschichten braucht Slack → ggf. große Hub-/Zielplatte(n) als Puffer.
 
-## Datenmodell (neu, additiv)
+## Datenmodell (additiv)
 
 ```sql
--- je Datei ein Hash (inkrementell via size+mtime-Cache)
-file_hashes(disk_uuid, rel_path, size, mtime, hash, hashed_at,
-            PRIMARY KEY(disk_uuid, rel_path))
--- je Top-Level-Ordner ein gerolltes Manifest
-folder_manifest(disk_uuid, top_rel_path, manifest_hash, file_count,
-                total_size, built_at, PRIMARY KEY(disk_uuid, top_rel_path))
--- Operations-Journal (Executor-Zustandsautomat)
-ops(id, kind, src_disk, src_path, dst_disk, dst_path, manifest_hash,
-    state, planned_at, updated_at, note)
+-- Schicht 1: Stufe-2-Manifest (lokal voll auf Manager-Mac)
+file_manifest(disk_uuid, rel_path, size, mtime, hash NULLABLE, hashed_at NULLABLE,
+              PRIMARY KEY(disk_uuid, rel_path))
+-- je Ordner ein Digest (nach D1 gepusht, D1 bleibt schlank)
+folder_digest(disk_uuid, top_rel_path, size_hist_hash, file_count, total_size,
+              manifest_hash NULLABLE, built_at, PRIMARY KEY(disk_uuid, top_rel_path))
+
+-- Schicht 2: Kontext (kuratiert, kollaborativ, mit Autor+Zeit)
+project(canonical_id, title, campaign_id NULLABLE, disposition, updated_by, updated_at)
+alias(canonical_id, folder_signature, source_disk, source_path, confirmed_by, confirmed_at)
+relation(parent_id, child_id, kind, created_by, created_at)  -- Kampagne ⊃ Teilstück, "ergänzt"
+comment(id, target_kind, target_id, body, author, created_at)  -- freie Team-Notizen
+context_audit(id, entity, entity_id, change, author, at)      -- Versionierung/Audit-Trail
+fleet_disk(disk_uuid NULLABLE, label, status, note)   -- auch ungescannte/offsite/tote
+
+-- Schicht 3: Operations-Journal
+ops(id, kind, src_disk, src_path, dst_disk, dst_path, manifest_hash, state,
+    planned_at, updated_at, note)
 ```
 
 ## Sicherheitsanalyse / Failure-Modes
 
 | Ereignis | Verhalten |
 |---|---|
-| Strom weg beim Kopieren | Ziel-Teilkopie unvollständig → Hash-Mismatch → verworfen/fortgesetzt; Quelle unberührt |
-| Platte abgezogen beim Kopieren | wie oben; Operation bleibt PLANNED/COPYING, resume später |
-| Ziel-Platte defekt nach Copy, vor Verify | Verify schlägt fehl → nicht VERIFIED → Quelle bleibt, keine Löschung |
-| rsync meldet Erfolg, Daten aber falsch | unabhängige Re-Hash-Verifikation fängt es → nicht VERIFIED |
-| „leere Hülle" als vermeintliche 2. Kopie | Manifest-Hash ≠ → zählt nicht als Kopie → keine Löschung der echten |
-| Nur-1-Kopie-Platte stirbt vor Duplizierung | **Restrisiko** — deshalb Einzelkopien zuerst; Fenster minimiert, nicht null |
-| Bug im Planer schlägt Löschung vor | Executor prüft INV-2 unabhängig zur Laufzeit; ohne 2 lesbare Kopien kein Delete |
+| Strom weg / Platte abgezogen beim Kopieren | Ziel-Teilkopie unvollständig → Hash-Mismatch → verworfen/fortgesetzt; Quelle unberührt |
+| Ziel defekt nach Copy, vor Verify | Verify schlägt fehl → nicht VERIFIED → Quelle bleibt |
+| rsync meldet Erfolg, Daten falsch | unabhängige Re-Hash fängt es |
+| „leere Hülle" als 2. Kopie | Hash ≠ → zählt nicht → echte Kopie nicht gelöscht |
+| falsches menschliches Label | INV-4: Kontext kann kein Delete der einzigen Kopie auslösen |
+| Nur-1-Kopie-Platte stirbt vor Duplizierung | **Restrisiko** — Einzelkopien zuerst; Fenster minimiert, nicht null |
 
 ## Phasen / Rollout
 
-1. **Phase 1 — Fingerprinting (read-only, null Risiko):** Manifest-Erfassung im
-   Scanner, DB-Tabellen, D1-Push, Identitäts-Index. Liefert sofort: echte
-   Kopien-Zahl je Inhalt, leere/kaputte Backups, KTM-Auflösung. **Start hier.**
-2. **Phase 2 — Planer (Dry-Run):** berechnet Session-Plan „exakt 2×", zeigt ihn,
-   ändert nichts. Review durch Jonathan.
-3. **Phase 3 — Executor (Copy-only):** nur Auffüllen 1→2 mit Copy-Verify, kein
-   Delete. Journal/Resume. Erst hier werden Daten geschrieben (nur *hinzugefügt*).
-4. **Phase 4 — Executor (Delete gated):** Überschuss-Löschung nach INV-2, opt-in,
-   `PENDING_DELETE` + finale Freigabe.
-5. **Phase 5 — Daemon + Push + Panel:** 24/7-Betrieb, Handy-Push, Live-Panel.
+1. **Phase 1 — Stufe-2-Manifest + strukturelles Matching (read-only):** Scanner
+   erfasst Datei-Metadaten-Manifest (Pfad/Größe/mtime), lokale Tabellen, Digest →
+   D1, strukturelles Matching (Größe/Dateizahl-Cluster, Teilmengen). Liefert sofort:
+   korrekte namensunabhängige Kopien-Zahl, Teilmengen-Klärung. **Start hier.**
+2. **Phase 2 — Kontext-Schicht + kollaborative Team-Website:** Wissensbasis-Tabellen,
+   gehostete interaktive Kuratier-UI (Worker+D1) mit Matchen/Ergänzen/Disposition/
+   Kommentaren, Multi-User + Autor/Audit; Claude erzeugt Vermutungen. Read-only
+   bzgl. Dateien.
+3. **Phase 3 — Planer (Dry-Run):** Session-Plan „exakt 2×" unter Nutzung von
+   Matching + Kontext; zeigt Plan, ändert nichts.
+4. **Phase 4 — Executor Copy-only:** Auffüllen 1→2 mit Copy-Verify (Stufe-3-Hash),
+   Journal/Resume. Nur *hinzufügen*, kein Delete.
+5. **Phase 5 — Executor Delete (gated):** Überschuss-Löschung nach INV-2/INV-4,
+   `PENDING_DELETE` + Freigabe.
+6. **Phase 6 — Daemon + Push + Panel:** 24/7 auf Manager-Mac, Handy-Push, Live-Panel.
 
 ## Offene Entscheidungen
 
-- Hash-Algorithmus: BLAKE3 (schnell, neue Dependency) vs SHA-256 (Stdlib).
-- Push-Kanal: ntfy.sh / Telegram / Pushover.
-- Gibt es **ungescannte** Platten (Offsite/Backup), die Kopien halten? (KTM-Frage)
-- Konsolidierungs-Zielplatten: vorhandene HUBs nutzen oder neue kaufen?
+- Hash-Algorithmus: BLAKE3 (schnell, Dependency) vs SHA-256 (Stdlib).
+- Push-Kanal fürs Handy: ntfy.sh / Telegram / Pushover.
+- Ungescannte Backup-Platten (KTM-Frage) — via `fleet_disk` erfassen.
+- Konsolidierungs-Zielplatten: vorhandene HUBs oder neue kaufen?
+- Manifest-Push-Frequenz/Digest-Format (D1-Schlankheit).
+- Team-Auth für die Kuratier-Website (einfacher geteilter Token je Person vs.
+  richtiges Login); Identität für Autor-Attribution.
