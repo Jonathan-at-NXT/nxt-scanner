@@ -167,6 +167,64 @@ PLANNED → COPYING → COPIED → VERIFYING → VERIFIED → (INV-2 erfüllt?) 
 - **Resume:** Journal beim Start lesen; unfertige Kopien per Hash prüfen/fortsetzen;
   keine Löschung ohne erfüllte Vorbedingung.
 
+## Auto-Intake (neue Sicherungen vollautomatisch einsortieren)
+
+Szenario: Dreh unterwegs → auf **2 SSDs** gesichert. Eine SSD behält Jonathan zum
+Schneiden (externe, unverwaltete Kopie), die **zweite** steckt er an den Manager-Mac.
+
+Ablauf:
+1. Mount-Event → Scanner erfasst Stufe-1/2-Manifest der neuen Platte.
+2. Matcher prüft: ist dieser Inhalt schon im System (Struktur/Hash)? → meist **neu**.
+3. **Auto-Intake-Regel:** neuer, unbekannter Inhalt wird als Projekt angelegt und
+   erhält Priorität, **2 verwaltete Kopien** in der Flotte zu erreichen (die
+   angesteckte SSD ist Kopie 1 im System; Planer legt Kopie 2 auf eine Fleet-Platte).
+4. Confirm-Loop (Website) fragt nur die Kontext-Attribute nach: Kunde, Projektname,
+   Notion-Page, Retention (s. u.) — Vorschläge von Claude, Bestätigung durch Team.
+5. Danach ist das Projekt regulär doppelt gesichert; die Schnitt-SSD bleibt außen vor.
+
+## Retention & Wirtschaftlichkeit (endlicher Speicher)
+
+Speicher ist begrenzt → Daten werden **nicht unbegrenzt** aufbewahrt, sondern **auf
+Zeit**, gekoppelt an Angebot/Rechnung.
+
+- **Retention je Projekt:** `keep_until`-Datum, abgeleitet aus einem **Retention-
+  Tarif** (`1 Jahr` / `5 Jahre` / `unbefristet`), der im Kontext gesetzt und idealer-
+  weise aus dem Angebot/der Notion-Projekte-DB übernommen wird.
+- **Lebenszyklus:** vor Ablauf → Warnung/Push an Kunde-Owner; nach Ablauf → Projekt
+  wird `releasable` (Disposition), Speicher **rückgewinnbar** (nach INV-2/INV-4:
+  löschen erst nach Bestätigung, nie automatisch die einzige Kopie).
+- **Kapazitätsplanung:** Dashboard „belegt vs. Budget", Prognose, welche abgelaufenen
+  Projekte wie viel TB freigeben. Ziel: konstantes Speicher-Budget halten **oder**
+  Zuwachs ist durch einen **Kostenposten „Datensicherung X Jahre"** im Angebot
+  gedeckt → Speicher rentiert sich statt zu wuchern.
+- **Kostentracking:** je Projekt TB × Retentionsdauer → Speicherkostenanteil, den man
+  aufs Angebot schreiben kann.
+
+## Architektur & Libraries
+
+**Backend / Datenhaltung**
+- **Cloudflare Worker (TypeScript) + D1 (SQLite)** — bereits vorhanden; trägt
+  Kontext-Website, Rollout/Panels, Digest-Store. `wrangler` fürs Deploy.
+- **Manager-Agent (Python 3.13)** auf dem alten MacBook: erweitert das bestehende
+  `storage_scanner`-Paket. Lokale volle Manifest-DB in **SQLite** (Stdlib).
+- **Kopieren:** `rsync` (System, battle-tested, `--partial`/resume). **Hashing:**
+  `blake3` (PyPI, mehrere GB/s) mit Fallback `hashlib.sha256` (Stdlib).
+- **Daemon:** `launchd` (wie bestehender Scanner). **Push:** `ntfy.sh` (gratis) via
+  simplem HTTPS-POST; Alternativen Telegram/Pushover.
+
+**Frontend (Kontext-Website, Team)**
+- Ausgeliefert vom Worker. **Preact + htm** (winzig, **kein Build-Step**, inline-bar)
+  für Reaktivität; **SortableJS** (klein, robust) für **Drag & Drop**. Alles inline/
+  self-contained — kein CDN-Zwang, funktioniert hinter strenger CSP.
+- Für später optional Ausbau zu Vite+React, als statische Assets vom Worker.
+- **Auth:** Demo = geteilter Token je Person (Autor-Attribution); Produktion →
+  **Cloudflare Access** (echtes Login) empfohlen.
+
+**Planer**
+- Python-Modul. Heuristik: (1) Bedarf ermitteln (1-Kopie-Projekte, Überschuss),
+  (2) Kapazitäts-Bin-Packing auf Zielplatten, (3) Session-/Wechsel-Reihenfolge
+  minimieren. Start mit Greedy-Heuristik; bei Bedarf später `OR-Tools`.
+
 ## Hardware-Modell
 
 - **Manager-Mac:** Jonathans alter MacBook, **3 USB-C-Ports**, läuft 24/7 als
@@ -188,7 +246,9 @@ folder_digest(disk_uuid, top_rel_path, size_hist_hash, file_count, total_size,
 
 -- Schicht 2: Kontext (kuratiert, kollaborativ, mit Autor+Zeit)
 project(canonical_id, title, campaign_id NULLABLE, disposition,
-        client NULLABLE, notion_url NULLABLE, updated_by, updated_at)
+        client NULLABLE, notion_url NULLABLE,
+        retention_tariff NULLABLE, keep_until NULLABLE,   -- Retention/Wirtschaftlichkeit
+        updated_by, updated_at)
 project_attr(canonical_id, key, value, set_by, set_at)  -- frei erweiterbare Attribute
 alias(canonical_id, folder_signature, source_disk, source_path, confirmed_by, confirmed_at)
 relation(parent_id, child_id, kind, created_by, created_at)  -- Kampagne ⊃ Teilstück, "ergänzt"
