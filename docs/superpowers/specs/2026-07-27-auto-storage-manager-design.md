@@ -118,6 +118,10 @@ nur Jonathan:
   Aliase zusammenziehen; Hierarchie (Kampagne ⊃ Teilstücke) direkt visuell aufbauen.
   Jeder Drop schreibt eine `relation`/`alias`-Zeile mit Autor.
 - **Disposition:** „das braucht nur 1× gesichert" / „2×-kritisch" / „löschbar".
+- **Attribute zuschreiben:** **Kunde**, **Notion-Page** (Link zur Projektseite),
+  weitere frei erweiterbare Felder (Key-Value) — verbindet Speicher ↔ Business:
+  Projekt auf Platte ↔ Notion-Projektseite ↔ Kunde. (Andockpunkt: die bestehende
+  Notion-Projekte-/Fullfilment-DB.)
 - **Kommentieren:** freie Notizen je Projekt/Match („Rohmaterial liegt offsite bei
   X", „Kunde will Rohdaten behalten").
 
@@ -183,7 +187,9 @@ folder_digest(disk_uuid, top_rel_path, size_hist_hash, file_count, total_size,
               manifest_hash NULLABLE, built_at, PRIMARY KEY(disk_uuid, top_rel_path))
 
 -- Schicht 2: Kontext (kuratiert, kollaborativ, mit Autor+Zeit)
-project(canonical_id, title, campaign_id NULLABLE, disposition, updated_by, updated_at)
+project(canonical_id, title, campaign_id NULLABLE, disposition,
+        client NULLABLE, notion_url NULLABLE, updated_by, updated_at)
+project_attr(canonical_id, key, value, set_by, set_at)  -- frei erweiterbare Attribute
 alias(canonical_id, folder_signature, source_disk, source_path, confirmed_by, confirmed_at)
 relation(parent_id, child_id, kind, created_by, created_at)  -- Kampagne ⊃ Teilstück, "ergänzt"
 comment(id, target_kind, target_id, body, author, created_at)  -- freie Team-Notizen
