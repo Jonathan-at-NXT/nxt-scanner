@@ -114,6 +114,9 @@ aber interaktiv mit Schreib-Endpunkten). **Jeder im Team** kann kuratieren, nich
 nur Jonathan:
 - **Matchen:** „diese 2 Einträge gehören zusammen" (Alias/Beziehung setzen).
 - **Ergänzen:** „das hier lässt sich mit diesem ergänzen" (Teilstück ↔ Kampagne).
+- **Gruppieren per Drag & Drop:** Projekte in einen **Überordner/Kampagne ziehen**;
+  Aliase zusammenziehen; Hierarchie (Kampagne ⊃ Teilstücke) direkt visuell aufbauen.
+  Jeder Drop schreibt eine `relation`/`alias`-Zeile mit Autor.
 - **Disposition:** „das braucht nur 1× gesichert" / „2×-kritisch" / „löschbar".
 - **Kommentieren:** freie Notizen je Projekt/Match („Rohmaterial liegt offsite bei
   X", „Kunde will Rohdaten behalten").
