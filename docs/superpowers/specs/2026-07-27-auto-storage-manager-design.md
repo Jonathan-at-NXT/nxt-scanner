@@ -117,6 +117,11 @@ nur Jonathan:
 - **Gruppieren per Drag & Drop:** Projekte in einen **Überordner/Kampagne ziehen**;
   Aliase zusammenziehen; Hierarchie (Kampagne ⊃ Teilstücke) direkt visuell aufbauen.
   Jeder Drop schreibt eine `relation`/`alias`-Zeile mit Autor.
+- **Domäne (Business vs. Privat):** viel Speicher ist **privat** (Ordner „privat").
+  Das ist ok, muss aber **getrennt** gemanaged und abgerechnet werden. Auto-Vorschlag:
+  Name enthält „privat" → `domain=private`; Bestätigung durch Team. Private Projekte
+  laufen in **eigenem Budget/eigener Ansicht**, außerhalb der Kunden-Retention-Ökonomie
+  (eigene Regeln, z. B. Owner entscheidet 1×/2×). Planer/Panels trennen die beiden.
 - **Disposition:** „das braucht nur 1× gesichert" / „2×-kritisch" / „löschbar".
 - **Attribute zuschreiben:** **Kunde**, **Notion-Page** (Link zur Projektseite),
   weitere frei erweiterbare Felder (Key-Value) — verbindet Speicher ↔ Business:
@@ -246,6 +251,7 @@ folder_digest(disk_uuid, top_rel_path, size_hist_hash, file_count, total_size,
 
 -- Schicht 2: Kontext (kuratiert, kollaborativ, mit Autor+Zeit)
 project(canonical_id, title, campaign_id NULLABLE, disposition,
+        domain,                                           -- 'business' | 'private' (getrennt gemanaged)
         client NULLABLE, notion_url NULLABLE,
         retention_tariff NULLABLE, keep_until NULLABLE,   -- Retention/Wirtschaftlichkeit
         updated_by, updated_at)
