@@ -55,19 +55,30 @@ async function fetchNotionDisks(env) {
 }
 
 async function buildRollout(env) {
-  const [notion, d1res] = await Promise.all([
+  const [notion, d1res, fleetres] = await Promise.all([
     fetchNotionDisks(env),
     env.DB.prepare("SELECT uuid, name, last_user, last_scan FROM disks").all(),
+    env.DB.prepare("SELECT label, status, alias_of FROM fleet_disk").all(),
   ]);
   const d1 = d1res.results || [];
   const d1ByUuid = new Set(d1.map((d) => (d.uuid || "").toUpperCase()));
   const d1ByName = new Set(d1.map((d) => normName(d.name)));
 
-  const disks = notion.map((n) => {
-    const done =
-      (n.uuid && d1ByUuid.has(n.uuid.toUpperCase())) || d1ByName.has(normName(n.name));
-    return { ...n, done };
-  });
+  // Fleet-Registry: ausgemusterte ausschließen, Aliase auf gescannten Namen abbilden
+  const fleet = {};
+  for (const f of fleetres.results || []) fleet[normName(f.label)] = f;
+
+  const disks = notion
+    .filter((n) => (fleet[normName(n.name)]?.status) !== "retired")
+    .map((n) => {
+      const reg = fleet[normName(n.name)];
+      const aliasDone = reg?.status === "alias" && d1ByName.has(normName(reg.alias_of));
+      const done =
+        (n.uuid && d1ByUuid.has(n.uuid.toUpperCase())) ||
+        d1ByName.has(normName(n.name)) ||
+        aliasDone;
+      return { ...n, done };
+    });
   disks.sort((a, b) => (a.name || "").localeCompare(b.name || "", "de", { numeric: true }));
 
   const byUser = {};
