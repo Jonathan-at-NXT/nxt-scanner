@@ -106,20 +106,13 @@ export default {
       return json({ ok: true });
     }
 
-    // ── Rollout-Ansicht (read-only, mit VIEW_TOKEN) ──
-    if (url.pathname === "/rollout.json") {
-      if (url.searchParams.get("key") !== env.VIEW_TOKEN) {
-        return json({ error: "unauthorized" }, 401);
-      }
-      try {
-        return json(await buildRollout(env));
-      } catch (e) {
-        return json({ error: "rollout", detail: String(e) }, 500);
-      }
-    }
-    if (url.pathname === "/rollout") {
-      return new Response(ROLLOUT_HTML, {
-        headers: { "content-type": "text/html; charset=utf-8" },
+    // ── Rollout-Tracking abgeschlossen (offline genommen 2026-08). ──
+    // buildRollout()/ROLLOUT_HTML bleiben im Code erhalten, um es bei Bedarf
+    // (neue Datenträger) mit einem Route-Eintrag wieder zu aktivieren.
+    if (url.pathname === "/rollout" || url.pathname === "/rollout.json") {
+      return new Response("Rollout-Tracking abgeschlossen – Seite offline.", {
+        status: 410,
+        headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }
 
