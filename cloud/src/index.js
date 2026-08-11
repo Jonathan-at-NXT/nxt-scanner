@@ -98,12 +98,102 @@ async function buildRollout(env) {
   };
 }
 
+// ── Datendashboard: Live-Aggregation über die D1 (bleibend) ──────────
+async function buildDashboard(env) {
+  const [disksR, projR, fleetR] = await Promise.all([
+    env.DB.prepare("SELECT uuid,name,used_bytes,capacity_bytes,last_scan,last_user FROM disks").all(),
+    env.DB.prepare("SELECT cluster_id,status,type,size_bytes,name,disk_uuid FROM projects").all(),
+    env.DB.prepare("SELECT label,status FROM fleet_disk").all(),
+  ]);
+  const disks = disksR.results || [], proj = projR.results || [], fleet = fleetR.results || [];
+  const TB = 1e12;
+
+  let val = 0, unc = 0, cont = 0;
+  for (const p of proj) {
+    const b = p.size_bytes || 0;
+    if (p.status === "validated") val += b;
+    else if (p.status === "container") cont += b;
+    else unc += b;
+  }
+  const usedTotal = disks.reduce((a, d) => a + (d.used_bytes || 0), 0);
+
+  // Kopien je Cluster (nur validierte, Kopien = verschiedene Platten)
+  const cl = {}, clName = {};
+  for (const p of proj) {
+    if (p.status !== "validated" || !p.cluster_id) continue;
+    const c = (cl[p.cluster_id] = cl[p.cluster_id] || { disks: new Set(), size: {} });
+    c.disks.add(p.disk_uuid);
+    c.size[p.disk_uuid] = Math.max(c.size[p.disk_uuid] || 0, p.size_bytes || 0);
+    clName[p.cluster_id] = p.name;
+  }
+  const hist = { "1": 0, "2": 0, "3+": 0 };
+  let unsecuredTB = 0, excessTB = 0;
+  const singles = [];
+  for (const k in cl) {
+    const ds = cl[k].disks.size;
+    const sizes = Object.values(cl[k].size).sort((a, b) => a - b);
+    const med = sizes[Math.floor(sizes.length / 2)] || 0;
+    if (ds === 1) { hist["1"]++; unsecuredTB += med; singles.push({ name: clName[k], gb: med / 1e9 }); }
+    else if (ds === 2) { hist["2"]++; }
+    else { hist["3+"]++; excessTB += (ds - 2) * med; }
+  }
+  singles.sort((a, b) => b.gb - a.gb);
+
+  const users = {};
+  for (const d of disks) {
+    const u = d.last_user || "—";
+    (users[u] = users[u] || { n: 0, tb: 0 });
+    users[u].n++; users[u].tb += (d.used_bytes || 0) / TB;
+  }
+  const reg = {};
+  for (const f of fleet) reg[f.status] = (reg[f.status] || 0) + 1;
+
+  const now = Date.now();
+  let fresh7 = 0, lastScan = 0;
+  for (const d of disks) {
+    const t = Date.parse(d.last_scan || "") || 0;
+    if (t > lastScan) lastScan = t;
+    if (now - t < 7 * 864e5) fresh7++;
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    disks: disks.length,
+    used_tb: round1(usedTotal / TB), validated_tb: round1(val / TB),
+    unclassified_tb: round1(unc / TB), container_tb: round1(cont / TB),
+    projects: Object.keys(cl).length,
+    copies: hist, unsecured_tb: round1(unsecuredTB / TB), excess_tb: round1(excessTB / TB),
+    top_unsecured: singles.slice(0, 12).map((s) => ({ name: s.name, gb: Math.round(s.gb) })),
+    by_user: Object.entries(users).map(([u, v]) => ({ user: u, n: v.n, tb: round1(v.tb) })).sort((a, b) => b.tb - a.tb),
+    registry: reg, fresh_7d: fresh7,
+    last_scan: lastScan ? new Date(lastScan).toISOString() : null,
+  };
+}
+const round1 = (x) => Math.round(x * 10) / 10;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") {
       return json({ ok: true });
+    }
+
+    // ── Datendashboard (bleibend, read-only, mit VIEW_TOKEN) ──
+    if (url.pathname === "/dashboard.json") {
+      if (url.searchParams.get("key") !== env.VIEW_TOKEN) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      try {
+        return json(await buildDashboard(env));
+      } catch (e) {
+        return json({ error: "dashboard", detail: String(e) }, 500);
+      }
+    }
+    if (url.pathname === "/dashboard") {
+      return new Response(DASHBOARD_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
     }
 
     // ── Rollout-Tracking abgeschlossen (offline genommen 2026-08). ──
@@ -298,3 +388,120 @@ const ROLLOUT_HTML = `<!doctype html>
 </script>
 </body>
 </html>`;
+
+// ── Bleibende Dashboard-Seite (same-origin, holt /dashboard.json) ──
+const DASHBOARD_HTML = `<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NXT Scanner — Datendashboard</title>
+<style>
+  :root{--bg:#f4f6f9;--surface:#fff;--surface2:#eceff4;--line:#d8dee7;--line2:#e6ebf1;--ink:#1a2230;--soft:#5b677a;--faint:#8b97a8;--accent:#0e8f8a;--good:#2c9d5b;--goodb:#e7f5ee;--miss:#d3455b;--missb:#fbe9ec;--excess:#3672c4;--excessb:#e8f0fb;--warn:#c67c1a;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--shadow:0 1px 2px rgba(20,30,50,.05),0 4px 14px rgba(20,30,50,.05)}
+  @media(prefers-color-scheme:dark){:root{--bg:#0d1017;--surface:#161b24;--surface2:#1d2431;--line:#29323f;--line2:#212a36;--ink:#e6ebf2;--soft:#97a3b4;--faint:#66707f;--accent:#3ad6c8;--good:#45c37a;--goodb:#14271c;--miss:#f26a7a;--missb:#2a1620;--excess:#5b9bf0;--excessb:#14213a;--warn:#e0a63a;--shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.28)}}
+  :root[data-theme="dark"]{--bg:#0d1017;--surface:#161b24;--surface2:#1d2431;--line:#29323f;--line2:#212a36;--ink:#e6ebf2;--soft:#97a3b4;--faint:#66707f;--accent:#3ad6c8;--good:#45c37a;--goodb:#14271c;--miss:#f26a7a;--missb:#2a1620;--excess:#5b9bf0;--excessb:#14213a;--warn:#e0a63a}
+  :root[data-theme="light"]{--bg:#f4f6f9;--surface:#fff;--surface2:#eceff4;--line:#d8dee7;--line2:#e6ebf1;--ink:#1a2230;--soft:#5b677a;--faint:#8b97a8;--accent:#0e8f8a;--good:#2c9d5b;--goodb:#e7f5ee;--miss:#d3455b;--missb:#fbe9ec;--excess:#3672c4;--excessb:#e8f0fb;--warn:#c67c1a}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.45}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .wrap{max-width:1120px;margin:0 auto;padding:30px 22px 64px}
+  header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding-bottom:18px}
+  h1{font-size:20px;margin:0;font-weight:650;letter-spacing:-.01em}
+  .sub{color:var(--soft);font-size:13px;margin-top:3px}
+  .status{font-size:12px;color:var(--faint);text-align:right}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:5px;vertical-align:middle}
+  .dot.stale{background:var(--faint)}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:22px 0}
+  @media(max-width:720px){.kpis{grid-template-columns:repeat(2,1fr)}}
+  .kpi{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:16px 17px;box-shadow:var(--shadow)}
+  .kpi .v{font-size:27px;font-weight:650;letter-spacing:-.02em;line-height:1}
+  .kpi .v .u{font-size:15px;color:var(--faint);font-weight:500;margin-left:3px}
+  .kpi .l{font-size:12px;color:var(--soft);margin-top:5px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:30px 0 12px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:18px;box-shadow:var(--shadow)}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.cols{grid-template-columns:1fr}}
+  .estimate{font-size:11px;font-weight:650;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 8px;margin-left:8px;text-transform:none;letter-spacing:0}
+  .bar{display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+  .bar>div{display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--mono);font-size:12px;font-weight:600;min-width:30px}
+  .legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:14px;font-size:12.5px;color:var(--soft)}
+  .lg{display:flex;align-items:center;gap:7px}.sw{width:11px;height:11px;border-radius:3px}
+  .row{display:grid;grid-template-columns:150px 1fr 96px;align-items:center;gap:12px;padding:7px 0;border-bottom:1px solid var(--line2)}
+  .row:last-child{border-bottom:0}.row .n{font-size:13px}.row .n small{display:block;color:var(--faint);font-size:11px}
+  .track{height:20px;background:var(--surface2);border-radius:6px;overflow:hidden}.track>span{display:block;height:100%;border-radius:6px}
+  .row .val{text-align:right;font-family:var(--mono);font-size:13px;font-weight:600}
+  .li{display:grid;grid-template-columns:1fr auto;gap:10px;padding:8px 0;border-bottom:1px solid var(--line2);font-size:13px}
+  .li:last-child{border-bottom:0}.li .sz{font-family:var(--mono);font-weight:600;color:var(--miss)}
+  .li .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chips{display:flex;flex-wrap:wrap;gap:10px}
+  .chip{background:var(--surface2);border-radius:8px;padding:8px 12px;font-size:12.5px}.chip b{font-family:var(--mono)}
+  .err{background:var(--missb);color:var(--miss);padding:16px;border-radius:12px;margin-top:24px}
+</style></head><body>
+<div class="wrap">
+  <header>
+    <div><h1>NXT Scanner — Datendashboard</h1><div class="sub">Live aus der zentralen Datenbank · aktualisiert automatisch</div></div>
+    <div class="status" id="status">lade…</div>
+  </header>
+  <div id="content"></div>
+</div>
+<script>
+  var KEY=new URLSearchParams(location.search).get("key")||"";
+  function tb(x){return x>=1000?(x/1000).toFixed(1)+" PB":x.toFixed(1)+" TB";}
+  function esc(s){var d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML;}
+  function render(d){
+    var c=document.getElementById("content");
+    var cop=d.copies||{}, c1=cop["1"]||0,c2=cop["2"]||0,c3=cop["3+"]||0, ctot=c1+c2+c3||1;
+    var st=d.validated_tb+d.unclassified_tb+d.container_tb||1;
+    var users=(d.by_user||[]), umax=Math.max.apply(null,users.map(function(u){return u.tb;}).concat([1]));
+    var reg=d.registry||{};
+    c.innerHTML=
+     '<div class="kpis">'+
+      '<div class="kpi"><div class="v num">'+d.disks+'</div><div class="l">physische Datenträger</div></div>'+
+      '<div class="kpi"><div class="v num">'+tb(d.used_tb)+'</div><div class="l">belegt gesamt</div></div>'+
+      '<div class="kpi"><div class="v num">'+d.projects+'</div><div class="l">eindeutige Projekte</div></div>'+
+      '<div class="kpi"><div class="v num">'+d.fresh_7d+'</div><div class="l">gescannt (letzte 7 Tage)</div></div>'+
+     '</div>'+
+     '<h2>Speicher-Aufteilung</h2>'+
+     '<div class="card"><div class="bar">'+
+       seg(d.validated_tb/st, "var(--accent)", d.validated_tb)+
+       seg(d.unclassified_tb/st, "var(--miss)", d.unclassified_tb)+
+       seg(d.container_tb/st, "var(--faint)", d.container_tb)+
+     '</div><div class="legend">'+
+       lg("var(--accent)","validierte Projekte "+tb(d.validated_tb))+
+       lg("var(--miss)","unklassifiziert "+tb(d.unclassified_tb))+
+       lg("var(--faint)","Container "+tb(d.container_tb))+
+     '</div></div>'+
+     '<h2>Backup-Gesundheit <span class="estimate">Schätzung (Namens-Cluster)</span></h2>'+
+     '<div class="cols"><div class="card">'+
+       '<div class="bar">'+
+         seg(c1/ctot,"var(--miss)",null,c1+" ungesichert")+
+         seg(c2/ctot,"var(--good)",null,c2+" optimal")+
+         seg(c3/ctot,"var(--excess)",null,c3+" mehrfach")+
+       '</div><div class="legend">'+
+         lg("var(--miss)","1 Kopie — "+c1)+lg("var(--good)","2 Kopien — "+c2)+lg("var(--excess)","3+ Kopien — "+c3)+
+       '</div>'+
+       '<div style="display:flex;gap:24px;margin-top:14px">'+
+         '<div><div class="num" style="font-size:20px;font-weight:650;color:var(--miss)">'+tb(d.unsecured_tb)+'</div><div class="l" style="font-size:12px;color:var(--soft)">ungesichert (nur 1 Kopie)</div></div>'+
+         '<div><div class="num" style="font-size:20px;font-weight:650;color:var(--excess)">'+tb(d.excess_tb)+'</div><div class="l" style="font-size:12px;color:var(--soft)">überzählig (löschbar)</div></div>'+
+       '</div></div>'+
+       '<div class="card"><div style="font-size:12px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Größte ungesicherte Projekte</div>'+
+        (d.top_unsecured||[]).map(function(x){return '<div class="li"><span class="nm">'+esc(x.name)+'</span><span class="sz">'+x.gb+' GB</span></div>';}).join("")+
+       '</div>'+
+     '</div>'+
+     '<h2>Pro Person</h2><div class="card">'+
+       users.map(function(u){return '<div class="row"><div class="n">'+esc(u.user)+'<small>'+u.n+' Datenträger</small></div>'+
+         '<div class="track"><span style="width:'+(u.tb/umax*100).toFixed(1)+'%;background:var(--accent)"></span></div>'+
+         '<div class="val">'+tb(u.tb)+'</div></div>';}).join("")+
+     '</div>'+
+     '<h2>Fleet-Registry</h2><div class="card"><div class="chips">'+
+       (Object.keys(reg).length? Object.keys(reg).map(function(k){return '<div class="chip">'+esc(k)+': <b>'+reg[k]+'</b></div>';}).join("") : '<span style="color:var(--faint);font-size:12.5px">keine Einträge</span>')+
+     '</div></div>';
+  }
+  function seg(frac,color,tbval,label){var w=Math.max(0,frac*100);if(w<0.5)return "";return '<div style="flex:'+w+';background:'+color+'">'+(label?label:(tbval!=null?tb(tbval):""))+'</div>';}
+  function lg(color,text){return '<span class="lg"><span class="sw" style="background:'+color+'"></span>'+text+'</span>';}
+  function setStatus(t,stale){document.getElementById("status").innerHTML='<span class="dot'+(stale?" stale":"")+'"></span>'+t;}
+  function load(){
+    fetch("/dashboard.json?key="+encodeURIComponent(KEY)).then(function(r){
+      if(r.status===401)throw new Error("Kein/falscher Zugriffs-Key in der URL (…/dashboard?key=…).");
+      if(!r.ok)throw new Error("Server "+r.status);return r.json();
+    }).then(function(d){render(d);var t=new Date(d.generated_at);setStatus("aktualisiert "+t.toLocaleTimeString("de-DE")+" · auto alle 60s",false);})
+    .catch(function(e){document.getElementById("content").innerHTML='<div class="err">'+esc(e.message)+'</div>';setStatus("Fehler",true);});
+  }
+  load(); setInterval(load,60000);
+</script></body></html>`;
