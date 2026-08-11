@@ -56,3 +56,34 @@ CREATE TABLE IF NOT EXISTS scans_log (
     node_count INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_scanslog_disk ON scans_log(disk_uuid, scan_date);
+
+-- Phase A: vom Menschen angelegte Projekte + Ingest-Sessions (Live-DIT-Board).
+-- Von Scannern via /ingest/project bzw. /ingest/session gepusht (Bearer-Auth).
+CREATE TABLE IF NOT EXISTS project_meta (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    date TEXT,
+    client TEXT,
+    ff_notion_url TEXT,
+    created_by TEXT,
+    created_at TEXT,
+    status TEXT DEFAULT 'active'
+);
+
+CREATE TABLE IF NOT EXISTS ingest_session (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    card_label TEXT,
+    card_uuid TEXT,
+    source_bytes INTEGER,
+    source_files INTEGER,
+    target_a_disk TEXT,
+    target_b_disk TEXT,
+    copies_done INTEGER DEFAULT 0,
+    verify_status TEXT DEFAULT 'pending',
+    state TEXT DEFAULT 'detected',
+    started_at TEXT,
+    finished_at TEXT,
+    host TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_session_project ON ingest_session(project_id);

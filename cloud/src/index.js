@@ -171,6 +171,49 @@ async function buildDashboard(env) {
 }
 const round1 = (x) => Math.round(x * 10) / 10;
 
+// ── Live-DIT-Board: aktive Projekte + Ingest-Sessions je Karte ──────
+function boardStatus(row) {
+  if (row.state === "error" || row.verify_status === "mismatch") return "error";
+  if ((row.copies_done || 0) >= 2 && row.verify_status === "verified") return "2x_verified";
+  if ((row.copies_done || 0) === 1) return "1x";
+  return "unsecured";
+}
+
+async function buildBoard(env) {
+  const [projR, sessR] = await Promise.all([
+    env.DB.prepare(
+      "SELECT id,name,date,client,ff_notion_url,created_by FROM project_meta WHERE status='active' ORDER BY date DESC, created_at DESC"
+    ).all(),
+    env.DB.prepare(
+      `SELECT id,project_id,card_label,source_bytes,source_files,target_a_disk,target_b_disk,
+              copies_done,verify_status,state,started_at,finished_at,host
+       FROM ingest_session ORDER BY started_at DESC`
+    ).all(),
+  ]);
+  const projects = projR.results || [];
+  const sessions = sessR.results || [];
+
+  const byProject = {};
+  for (const p of projects) byProject[p.id] = { ...p, sessions: [] };
+  const orphans = [];
+  for (const s of sessions) {
+    const row = { ...s, status: boardStatus(s) };
+    if (byProject[s.project_id]) byProject[s.project_id].sessions.push(row);
+    else orphans.push(row);
+  }
+
+  const counts = { unsecured: 0, "1x": 0, "2x_verified": 0, error: 0 };
+  for (const s of sessions) counts[boardStatus(s)]++;
+
+  return {
+    generated_at: new Date().toISOString(),
+    projects: Object.values(byProject),
+    orphan_sessions: orphans,
+    session_total: sessions.length,
+    counts,
+  };
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -194,6 +237,76 @@ export default {
       return new Response(DASHBOARD_HTML, {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
+    }
+
+    // ── Live-DIT-Board (VIEW_TOKEN-gated wie Dashboard) ──
+    if (url.pathname === "/board.json") {
+      if (url.searchParams.get("key") !== env.VIEW_TOKEN) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      try {
+        return json(await buildBoard(env));
+      } catch (e) {
+        return json({ error: "board", detail: String(e) }, 500);
+      }
+    }
+    if (url.pathname === "/board") {
+      return new Response(BOARD_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+
+    // ── Projekt/Session-Ingest (Bearer INGEST_TOKEN, upsert) ──
+    if (url.pathname === "/ingest/project" && request.method === "POST") {
+      if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+      let p;
+      try { p = await request.json(); } catch { return json({ error: "invalid json" }, 400); }
+      if (!p || !p.id || !p.name) return json({ error: "missing id/name" }, 400);
+      try {
+        await env.DB.prepare(
+          `INSERT INTO project_meta(id,name,date,client,ff_notion_url,created_by,created_at,status)
+           VALUES(?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET
+             name=excluded.name, date=excluded.date, client=excluded.client,
+             ff_notion_url=excluded.ff_notion_url, created_by=excluded.created_by,
+             status=excluded.status`
+        ).bind(
+          p.id, p.name, p.date ?? null, p.client ?? null, p.ff_notion_url ?? null,
+          p.created_by ?? null, p.created_at ?? null, p.status ?? "active"
+        ).run();
+      } catch (e) {
+        return json({ error: "db", detail: String(e) }, 500);
+      }
+      return json({ ok: true, project: p.id });
+    }
+
+    if (url.pathname === "/ingest/session" && request.method === "POST") {
+      if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+      let s;
+      try { s = await request.json(); } catch { return json({ error: "invalid json" }, 400); }
+      if (!s || !s.id || !s.project_id) return json({ error: "missing id/project_id" }, 400);
+      try {
+        await env.DB.prepare(
+          `INSERT INTO ingest_session(id,project_id,card_label,card_uuid,source_bytes,source_files,
+             target_a_disk,target_b_disk,copies_done,verify_status,state,started_at,finished_at,host)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET
+             card_label=excluded.card_label, card_uuid=excluded.card_uuid,
+             source_bytes=excluded.source_bytes, source_files=excluded.source_files,
+             target_a_disk=excluded.target_a_disk, target_b_disk=excluded.target_b_disk,
+             copies_done=excluded.copies_done, verify_status=excluded.verify_status,
+             state=excluded.state, finished_at=excluded.finished_at, host=excluded.host`
+        ).bind(
+          s.id, s.project_id, s.card_label ?? null, s.card_uuid ?? null,
+          s.source_bytes ?? null, s.source_files ?? null,
+          s.target_a_disk ?? null, s.target_b_disk ?? null,
+          s.copies_done ?? 0, s.verify_status ?? "pending", s.state ?? "detected",
+          s.started_at ?? null, s.finished_at ?? null, s.host ?? null
+        ).run();
+      } catch (e) {
+        return json({ error: "db", detail: String(e) }, 500);
+      }
+      return json({ ok: true, session: s.id });
     }
 
     // ── Rollout-Tracking abgeschlossen (offline genommen 2026-08). ──
@@ -504,4 +617,90 @@ const DASHBOARD_HTML = `<!doctype html>
     .catch(function(e){document.getElementById("content").innerHTML='<div class="err">'+esc(e.message)+'</div>';setStatus("Fehler",true);});
   }
   load(); setInterval(load,60000);
+</script></body></html>`;
+
+// ── Live-DIT-Board (same-origin, holt /board.json alle 8s) ──
+const BOARD_HTML = `<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NXT Scanner — DIT-Board</title>
+<style>
+  :root{--bg:#f4f6f9;--surface:#fff;--surface2:#eceff4;--line:#d8dee7;--line2:#e6ebf1;--ink:#1a2230;--soft:#5b677a;--faint:#8b97a8;--accent:#0e8f8a;--good:#2c9d5b;--goodb:#e7f5ee;--miss:#d3455b;--missb:#fbe9ec;--warn:#c67c1a;--warnb:#fdf1e0;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--shadow:0 1px 2px rgba(20,30,50,.05),0 4px 14px rgba(20,30,50,.05)}
+  @media(prefers-color-scheme:dark){:root{--bg:#0d1017;--surface:#161b24;--surface2:#1d2431;--line:#29323f;--line2:#212a36;--ink:#e6ebf2;--soft:#97a3b4;--faint:#66707f;--accent:#3ad6c8;--good:#45c37a;--goodb:#14271c;--miss:#f26a7a;--missb:#2a1620;--warn:#e0a63a;--warnb:#2a2114;--shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.28)}}
+  :root[data-theme="dark"]{--bg:#0d1017;--surface:#161b24;--surface2:#1d2431;--line:#29323f;--line2:#212a36;--ink:#e6ebf2;--soft:#97a3b4;--faint:#66707f;--accent:#3ad6c8;--good:#45c37a;--goodb:#14271c;--miss:#f26a7a;--missb:#2a1620;--warn:#e0a63a;--warnb:#2a2114}
+  :root[data-theme="light"]{--bg:#f4f6f9;--surface:#fff;--surface2:#eceff4;--line:#d8dee7;--line2:#e6ebf1;--ink:#1a2230;--soft:#5b677a;--faint:#8b97a8;--accent:#0e8f8a;--good:#2c9d5b;--goodb:#e7f5ee;--miss:#d3455b;--missb:#fbe9ec;--warn:#c67c1a;--warnb:#fdf1e0}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.45}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .wrap{max-width:1120px;margin:0 auto;padding:30px 22px 64px}
+  header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding-bottom:18px}
+  h1{font-size:20px;margin:0;font-weight:650;letter-spacing:-.01em}
+  .sub{color:var(--soft);font-size:13px;margin-top:3px}
+  .status{font-size:12px;color:var(--faint);text-align:right}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:5px;vertical-align:middle}
+  .dot.stale{background:var(--faint)}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:22px 0}
+  @media(max-width:720px){.kpis{grid-template-columns:repeat(2,1fr)}}
+  .kpi{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:16px 17px;box-shadow:var(--shadow)}
+  .kpi .v{font-size:27px;font-weight:650;letter-spacing:-.02em;line-height:1}
+  .kpi .l{font-size:12px;color:var(--soft);margin-top:5px}
+  .proj{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:16px 18px;box-shadow:var(--shadow);margin-bottom:14px}
+  .proj h3{margin:0;font-size:15px;font-weight:650;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .proj .meta{color:var(--soft);font-size:12px;margin-top:2px}
+  .proj .meta a{color:var(--accent);text-decoration:none}
+  .ff{font-size:11px;font-weight:650;padding:1px 8px;border-radius:999px;background:var(--warnb);color:var(--warn)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:12px}
+  .sess{border:1px solid var(--line);border-radius:10px;padding:11px 12px;background:var(--surface2)}
+  .sess .cl{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sess .det{font-family:var(--mono);color:var(--faint);font-size:11px;margin-top:3px}
+  .pill{font-size:11px;font-weight:650;padding:2px 9px;border-radius:999px;white-space:nowrap;display:inline-block;margin-top:8px}
+  .pill.ok{background:var(--goodb);color:var(--good)}
+  .pill.one{background:var(--warnb);color:var(--warn)}
+  .pill.uns{background:var(--missb);color:var(--miss)}
+  .pill.err{background:var(--missb);color:var(--miss)}
+  .empty{color:var(--faint);font-size:13px;padding:20px 0}
+  .err{background:var(--missb);color:var(--miss);padding:16px;border-radius:12px;margin-top:24px}
+</style></head><body>
+<div class="wrap">
+  <header>
+    <div><h1>NXT Scanner — DIT-Board</h1><div class="sub">Live-Sicherungsstatus je Karte · aktualisiert automatisch</div></div>
+    <div class="status" id="status">lade…</div>
+  </header>
+  <div id="content"></div>
+</div>
+<script>
+  var KEY=new URLSearchParams(location.search).get("key")||"";
+  function esc(s){var d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML;}
+  function gb(b){return b?(b/1e9).toFixed(1)+" GB":"—";}
+  var LABEL={unsecured:["uns","ungesichert"],"1x":["one","1x — Achtung"],"2x_verified":["ok","2x gesichert · formatieren ok"],error:["err","Fehler"]};
+  function pill(st){var m=LABEL[st]||["uns",st];return '<span class="pill '+m[0]+'">'+m[1]+'</span>';}
+  function render(d){
+    var c=document.getElementById("content");
+    var k=d.counts||{};
+    var kpis='<div class="kpis">'+
+      '<div class="kpi"><div class="v num">'+(d.projects||[]).length+'</div><div class="l">aktive Projekte</div></div>'+
+      '<div class="kpi"><div class="v num" style="color:var(--good)">'+(k["2x_verified"]||0)+'</div><div class="l">Karten 2x gesichert</div></div>'+
+      '<div class="kpi"><div class="v num" style="color:var(--warn)">'+(k["1x"]||0)+'</div><div class="l">nur 1 Kopie</div></div>'+
+      '<div class="kpi"><div class="v num" style="color:var(--miss)">'+((k.unsecured||0)+(k.error||0))+'</div><div class="l">ungesichert / Fehler</div></div>'+
+    '</div>';
+    var projs=d.projects||[];
+    var body=projs.length? projs.map(function(p){
+      var ff=p.ff_notion_url?'<a class="ff" href="'+esc(p.ff_notion_url)+'" target="_blank">FF</a>':'';
+      var meta=[p.date,p.client].filter(Boolean).map(esc).join(" · ");
+      var sess=(p.sessions||[]).length? '<div class="cards">'+p.sessions.map(function(s){
+        return '<div class="sess"><div class="cl">'+esc(s.card_label||"Karte")+'</div>'+
+          '<div class="det">'+(s.source_files||0)+' Dateien · '+gb(s.source_bytes)+'</div>'+
+          pill(s.status)+'</div>';
+      }).join("")+'</div>' : '<div class="empty">noch keine Karte eingelesen</div>';
+      return '<div class="proj"><h3>'+esc(p.name)+' '+ff+'</h3><div class="meta">'+meta+'</div>'+sess+'</div>';
+    }).join("") : '<div class="empty">Keine aktiven Projekte. Lege im NXT Scanner ein Projekt an.</div>';
+    c.innerHTML=kpis+body;
+  }
+  function setStatus(t,stale){document.getElementById("status").innerHTML='<span class="dot'+(stale?" stale":"")+'"></span>'+t;}
+  function load(){
+    fetch("/board.json?key="+encodeURIComponent(KEY)).then(function(r){
+      if(r.status===401)throw new Error("Kein/falscher Zugriffs-Key in der URL (…/board?key=…).");
+      if(!r.ok)throw new Error("Server "+r.status);return r.json();
+    }).then(function(d){render(d);var t=new Date(d.generated_at);setStatus("aktualisiert "+t.toLocaleTimeString("de-DE")+" · auto alle 8s",false);})
+    .catch(function(e){document.getElementById("content").innerHTML='<div class="err">'+esc(e.message)+'</div>';setStatus("Fehler",true);});
+  }
+  load(); setInterval(load,8000);
 </script></body></html>`;
