@@ -151,8 +151,37 @@ Board-Status je Karte leitet sich aus `ingest_session` ab: **ungesichert** (0),
   Invariante: **erst kopieren+verifizieren, dann darf jemand formatieren** (nie vorher grün).
 - **`ingest/verify`** — Verify der 2 Kopien gegen Quelle (Phase A: Größe+Dateizahl+xxHash-Sample;
   volle SHA-256 kommt in Phase B). Setzt `verify_status`.
-- **`ingest/organize`** — legt Zielordner in NXT-Konvention an: `YYYY-MM-DD_Projekt_TYP`
-  mit `FOOTAGE/PHOTOS/BTS/WORKING`, abgeleitet aus `project_meta` + Karten-Typ.
+- **`ingest/organize`** — Medien via **Kamera-Karten-Map** aus allen (auch tiefen) Roots
+  einsammeln, nach **Video/Foto trennen**, **sämtliche Karten-Unterordner eliminieren** und
+  flach ablegen:
+  - Video → `YYYY-MM-DD_Projekt_FOOTAGE/<DATE>/<CAMERA>/…`
+  - Foto  → `YYYY-MM-DD_Projekt_PHOTOS/<DATE>/<CAMERA>/…`
+  - `<DATE>` = Dreh-/Einlesedatum der Karte (nicht die Projekt-Startzeit); trennt mehrtägige
+    Shoots pro Tag.
+  - `<CAMERA>` = „CAMERA INITIALEN" (z. B. `FX3 JO`), abgeleitet aus Datei-Präfix oder abgefragt.
+  - **Kollisions-Sicherheit (harte Regel, datenverlust-kritisch):** beim Flatten können
+    gleiche Dateinamen kollidieren (DCIM-Rollover `100MSDCF`/`101MSDCF`, Spanned Clips). Nie
+    überschreiben — bei Namensgleichheit *und* unterschiedlichem Inhalt eindeutig suffixen
+    (`C0001.MP4` → `C0001__2.MP4`) und im Session-Log vermerken. Gleicher Name + gleicher
+    Inhalt = Dedup (nur einmal).
+
+- **`ingest/camera_map`** — datengetriebene (nicht hartcodierte) Tabelle der Kamera-Karten-
+  Strukturen: je Hersteller die Foto-/Video-Roots + zugehörige Extensions. Erweiterbar durch
+  das Team. Auto-Detection des Herstellers aus vorhandenen Root-Ordnern (`M4ROOT` → Sony,
+  `100GOPRO` → GoPro, `DJI_` → DJI) belegt den Kamera-Namensvorschlag vor.
+  - **Namens-Ableitung „CAMERA INITIALEN":** konsistentes Datei-Präfix erkennen
+    (`FX3 JO00001` → `FX3 JO`). Ist es nur ein Kamera-Default (`C####`, `MVI_`, `DSC`,
+    `DJI_`, `GX##`) → **beim Anstecken abfragen** („Kamera + Initialen?"), Vorschlag aus
+    Auto-Detection vorbelegt, pro Karte/Session gemerkt.
+
+  | Hersteller | Foto-Root | Video-Root |
+  |---|---|---|
+  | Sony (FX3/A7S) | `DCIM/…` | `PRIVATE/M4ROOT/CLIP/` (alt: `PRIVATE/AVCHD/BDMV/STREAM/`) |
+  | Canon (EOS/Cinema) | `DCIM/…CANON` | `DCIM/…` bzw. `CONTENTS/CLIPS…` (XF/C-Serie) |
+  | Panasonic (GH) | `DCIM/` | `PRIVATE/AVCHD/…` bzw. `CONTENTS/VIDEO/` (P2) |
+  | Blackmagic (BMPCC) | — | flach im Karten-Root (`.braw`/`.mov`) |
+  | DJI (Osmo/Drone) | `DCIM/DJI_…` | `DCIM/DJI_…` |
+  | GoPro | `DCIM/100GOPRO` | `DCIM/100GOPRO` |
 - **`project_store`** — CRUD für `project_meta`/`ingest_session`, lokal + D1-Push
   (gleiche `d1_client`-Mechanik wie Scan-Digest).
 - **Worker `/board` + `/board.json`** — Live-DIT-Board (VIEW_TOKEN-gated wie `/dashboard`):
@@ -163,8 +192,10 @@ Board-Status je Karte leitet sich aus `ingest_session` ab: **ungesichert** (0),
 ### Flow (Projekt-zuerst)
 
 1. Menubar → „Neues Projekt" (oder aktives wählen). Anlegen: Name*, Datum(auto), Kunde?, FF-Link?.
-2. Karte anstecken → `device_monitor` erkennt sie → „In Projekt X einlesen?".
-3. `copier` → 2 Ziele → `verify` → `organize` in NXT-Konvention.
+2. Karte anstecken → `device_monitor` erkennt sie → „In Projekt X einlesen?". `camera_map`
+   erkennt Hersteller + versucht „CAMERA INITIALEN" aus Datei-Präfix; sonst abfragen.
+3. `copier` → 2 Ziele → `verify` → `organize`: Medien flach nach `…_TYP/<DATE>/<CAMERA>/`,
+   Foto/Video getrennt, kollisions-sicher.
 4. `ingest_session` wandert `detected→copying→verifying→done`; Push an D1.
 5. Board zeigt live: welche Karte 2× sicher = **grün/formatieren ok**.
 
