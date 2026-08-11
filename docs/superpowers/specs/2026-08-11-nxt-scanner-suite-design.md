@@ -100,6 +100,79 @@ Jede Einheit klar abgegrenzt: Ingest-Engine, Hash-Utils, Katalog-Writer, Reconci
 - CutValet-Sezierung (Referenz): `dvea`-Paket, SHA-256+xxHash64, Sidecar `YYYY/MM/DD/Kamera/`,
   per-Drive `.dvea-archive/catalog.db`, SigLIP-Embeddings.
 
+## Phase A — Konkretisierung (Live-DIT + Projekt-Anlage)
+
+**Entscheidungen (User, 2026-08-11):** Projekt-Entity **in D1** (Notion-Mirror erst Phase C).
+**Projekt-zuerst-Flow**. Felder: `name`* · `date` (auto, editierbar) · `client` (optional) ·
+`ff_notion_url` (optional Link = FF-Marker; leer = kein FF) · `created_by` (auto Mac-User).
+
+### Datenmodell (neu, additiv zum bestehenden Schema)
+
+Getrennt von der abgeleiteten `projects`-Tabelle (Cluster-Sicht aus `folder_tree`).
+
+```sql
+CREATE TABLE project_meta (
+    id TEXT PRIMARY KEY,           -- ULID/uuid, clientseitig erzeugt
+    name TEXT NOT NULL,
+    date TEXT,                     -- YYYY-MM-DD, default heute
+    client TEXT,                   -- optional, Freitext
+    ff_notion_url TEXT,            -- optional; gesetzt = FF-Projekt
+    created_by TEXT,               -- Mac-User
+    created_at TEXT,
+    status TEXT DEFAULT 'active'   -- active | closed
+);
+
+CREATE TABLE ingest_session (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,      -- FK project_meta.id
+    card_label TEXT,               -- Volume-Name der Karte
+    card_uuid TEXT,                -- falls verfügbar
+    source_bytes INTEGER,
+    source_files INTEGER,
+    target_a_disk TEXT,            -- Ziel-Platte 1 (Name/UUID)
+    target_b_disk TEXT,            -- Ziel-Platte 2
+    copies_done INTEGER,          -- 0 | 1 | 2
+    verify_status TEXT,            -- pending | verifying | verified | mismatch
+    state TEXT,                    -- detected | copying | verifying | done | error
+    started_at TEXT,
+    finished_at TEXT,
+    host TEXT                      -- welcher Mac
+);
+```
+
+Board-Status je Karte leitet sich aus `ingest_session` ab: **ungesichert** (0),
+**1× (Achtung)**, **2× verifiziert (formatieren ok)**, **Fehler/Mismatch**.
+
+### Komponenten (isoliert, je eine Aufgabe)
+
+- **`ingest/device_monitor`** — erkennt gemountete Wechselmedien (Karte vs. Ziel-Platte),
+  meldet Kandidaten. Baut auf vorhandener Mount-Erkennung auf.
+- **`ingest/copier`** — chunked Copy Quelle→2 Ziele, Fortschritt, resumable/journaled.
+  Invariante: **erst kopieren+verifizieren, dann darf jemand formatieren** (nie vorher grün).
+- **`ingest/verify`** — Verify der 2 Kopien gegen Quelle (Phase A: Größe+Dateizahl+xxHash-Sample;
+  volle SHA-256 kommt in Phase B). Setzt `verify_status`.
+- **`ingest/organize`** — legt Zielordner in NXT-Konvention an: `YYYY-MM-DD_Projekt_TYP`
+  mit `FOOTAGE/PHOTOS/BTS/WORKING`, abgeleitet aus `project_meta` + Karten-Typ.
+- **`project_store`** — CRUD für `project_meta`/`ingest_session`, lokal + D1-Push
+  (gleiche `d1_client`-Mechanik wie Scan-Digest).
+- **Worker `/board` + `/board.json`** — Live-DIT-Board (VIEW_TOKEN-gated wie `/dashboard`):
+  offene Projekte, je Karte 2×-Status, „formatieren ok?". Auto-refresh.
+- **Menubar-UI** — „Neues Projekt" (Name/Kunde/FF-Link/Datum) · offenes Projekt wählen ·
+  „Karte einlesen" · Fortschritt/Status. Muster: bestehende rumps-Menüs.
+
+### Flow (Projekt-zuerst)
+
+1. Menubar → „Neues Projekt" (oder aktives wählen). Anlegen: Name*, Datum(auto), Kunde?, FF-Link?.
+2. Karte anstecken → `device_monitor` erkennt sie → „In Projekt X einlesen?".
+3. `copier` → 2 Ziele → `verify` → `organize` in NXT-Konvention.
+4. `ingest_session` wandert `detected→copying→verifying→done`; Push an D1.
+5. Board zeigt live: welche Karte 2× sicher = **grün/formatieren ok**.
+
+### YAGNI für Phase A
+
+- Content-Hash-Katalog/Sidecars (Phase B), KI (Phase D), Notion-Mirror (Phase C) bleiben draußen.
+- Verify in Phase A: Größe+Count+xxHash-Stichprobe genügt fürs Board; volle Byte-Identität Phase B.
+
 ## Offene Punkte für nach der Compaction
 
 - Scope-Forks 1–4 final entscheiden (Empfehlungen oben).
