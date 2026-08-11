@@ -24,6 +24,22 @@ CREATE TABLE IF NOT EXISTS folder_tree (
     UNIQUE(disk_uuid, rel_path)
 );
 CREATE INDEX IF NOT EXISTS idx_tree_disk_depth ON folder_tree(disk_uuid, depth);
+
+-- Phase A: vom Menschen angelegte Projekte + Ingest-Sessions (getrennt von der
+-- scan-abgeleiteten projects-Sicht).
+CREATE TABLE IF NOT EXISTS project_meta (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, date TEXT, client TEXT,
+    ff_notion_url TEXT, created_by TEXT, created_at TEXT,
+    status TEXT DEFAULT 'active'
+);
+CREATE TABLE IF NOT EXISTS ingest_session (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL, card_label TEXT, card_uuid TEXT,
+    source_bytes INTEGER, source_files INTEGER,
+    target_a_disk TEXT, target_b_disk TEXT,
+    copies_done INTEGER DEFAULT 0, verify_status TEXT DEFAULT 'pending',
+    state TEXT DEFAULT 'detected', started_at TEXT, finished_at TEXT, host TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_session_project ON ingest_session(project_id);
 """
 
 
