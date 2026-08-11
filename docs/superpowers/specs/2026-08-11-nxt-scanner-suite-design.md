@@ -199,6 +199,16 @@ Board-Status je Karte leitet sich aus `ingest_session` ab: **ungesichert** (0),
 4. `ingest_session` wandert `detected→copying→verifying→done`; Push an D1.
 5. Board zeigt live: welche Karte 2× sicher = **grün/formatieren ok**.
 
+### Sicherheit (harte Regel, Phase A)
+
+- **Kein Key im Download/Repo.** Weder `INGEST_TOKEN` noch `VIEW_TOKEN` noch Notion-/D1-Keys
+  landen im PyInstaller-Bundle oder auf GitHub. Alle Tokens kommen zur Laufzeit aus **lokaler
+  Config** (manuell eingetragen, wie `change_d1_settings`) bzw. als **CF-Secret** im Worker.
+- **Alle sensiblen Endpunkte token-gated.** Board und alle Projekt-/Kundendaten hinter einem
+  Key (Muster `/dashboard` mit `VIEW_TOKEN`). Ohne gültigen Key → 401, keine Daten.
+- Der Ingest-Push nach D1 nutzt weiterhin den Bearer-`INGEST_TOKEN`; Schreibpfad und Lesepfad
+  bleiben getrennte Tokens.
+
 ### YAGNI für Phase A
 
 - Content-Hash-Katalog/Sidecars (Phase B), KI (Phase D), Notion-Mirror (Phase C) bleiben draußen.
