@@ -30,6 +30,15 @@ a = Analysis(
         'storage_scanner.admin',
         'storage_scanner.db',
         'storage_scanner.d1_client',
+        'storage_scanner.ingest',
+        'storage_scanner.ingest.camera_map',
+        'storage_scanner.ingest.organize',
+        'storage_scanner.ingest.verify',
+        'storage_scanner.ingest.copier',
+        'storage_scanner.ingest.store',
+        'storage_scanner.ingest.orchestrator',
+        'storage_scanner.ingest.device_monitor',
+        'storage_scanner.ingest.d1_projects',
         # rumps
         'rumps',
         # PyObjC

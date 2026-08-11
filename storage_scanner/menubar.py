@@ -10,13 +10,14 @@ import queue
 import re
 import threading
 import webbrowser
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 
 import rumps
 from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
 
-from . import __version__
+from . import __version__, db
+from .ingest import store, orchestrator, device_monitor, camera_map, d1_projects
 from .paths import (
     CONFIG_PATH, LOG_PATH, LAST_SCAN_PATH, REPORTS_DIR,
     ensure_dirs, migrate_legacy_data, get_resource_path,
@@ -100,6 +101,20 @@ class StorageScannerApp(rumps.App):
         self.fullfilment_item = rumps.MenuItem("Fullfilment Sync", callback=self.start_fullfilment_sync)
         self.d1_item = rumps.MenuItem("D1-Sync einrichten...", callback=self.change_d1_settings)
         self._fullfilment_busy = False
+
+        # Phase A: Projekte + Ingest (Live-DIT)
+        self._active_project = None
+        ap_id = config.get("active_project_id")
+        ap_name = config.get("active_project_name")
+        if ap_id and ap_name:
+            self._active_project = {"id": ap_id, "name": ap_name}
+        self._ingest_busy = False
+        self.new_project_item = rumps.MenuItem("Neues Projekt...", callback=self.new_project)
+        self.active_project_item = rumps.MenuItem(
+            f"Aktives Projekt: {ap_name}" if ap_name else "Aktives Projekt: –",
+            callback=self.choose_project,
+        )
+        self.ingest_item = rumps.MenuItem("Karte einlesen...", callback=self.ingest_card)
         self.version_item = rumps.MenuItem(f"Version {__version__}")
         self.update_item = rumps.MenuItem("Auf Updates prüfen...", callback=self._on_update_click)
         self._update_info = None
@@ -110,6 +125,10 @@ class StorageScannerApp(rumps.App):
             self.name_item,
             self.notion_item,
             self.d1_item,
+            None,
+            self.new_project_item,
+            self.active_project_item,
+            self.ingest_item,
             None,
             self.status_item,
             self.queue_item,
@@ -194,6 +213,172 @@ class StorageScannerApp(rumps.App):
         save_config(config)
         rumps.notification("NXT Storage Scanner", "D1-Sync aktiv",
                            "Der nächste Scan wird zusätzlich zentral gesichert.")
+
+    # ── Projekte & Ingest (Phase A, Live-DIT) ───────────────────────
+
+    def _host_name(self):
+        import socket
+        try:
+            return socket.gethostname()
+        except OSError:
+            return None
+
+    def _set_active(self, pid: str, name: str) -> None:
+        self._active_project = {"id": pid, "name": name}
+        config = load_config()
+        config["active_project_id"] = pid
+        config["active_project_name"] = name
+        save_config(config)
+        self.active_project_item.title = f"Aktives Projekt: {name}"
+
+    def new_project(self, _):
+        r = rumps.Window(message="Projektname:", title="Neues Projekt (1/3)",
+                         default_text="", ok="Weiter", cancel="Abbrechen",
+                         dimensions=(340, 24)).run()
+        if not r.clicked or not r.text.strip():
+            return
+        name = r.text.strip()
+        r = rumps.Window(message="Kunde (optional):", title="Neues Projekt (2/3)",
+                         default_text="", ok="Weiter", cancel="Abbrechen",
+                         dimensions=(340, 24)).run()
+        if not r.clicked:
+            return
+        client = r.text.strip() or None
+        r = rumps.Window(
+            message="FF-Notion-Link (optional – leer = kein FF-Projekt):",
+            title="Neues Projekt (3/3)", default_text="",
+            ok="Anlegen", cancel="Abbrechen", dimensions=(400, 24)).run()
+        if not r.clicked:
+            return
+        ff = r.text.strip() or None
+
+        today = date.today().isoformat()
+        conn = db.connect()
+        try:
+            pid = store.create_project(name, today, client=client, ff_notion_url=ff,
+                                       created_by=self._user_name or None, conn=conn)
+            payload = store.project_payload(pid, conn)
+        finally:
+            conn.close()
+        d1_projects.push_project_safe(payload)
+        self._set_active(pid, name)
+        rumps.notification("NXT Storage Scanner", "Projekt angelegt", name)
+
+    def choose_project(self, _):
+        conn = db.connect()
+        try:
+            projs = store.list_projects(conn=conn)
+        finally:
+            conn.close()
+        if not projs:
+            rumps.notification("NXT Storage Scanner", "",
+                               "Noch kein Projekt. Erst 'Neues Projekt...'.")
+            return
+        listing = "\n".join(f"{i + 1}. {p['name']}" for i, p in enumerate(projs))
+        r = rumps.Window(message=f"Nummer des Projekts eingeben:\n{listing}",
+                         title="Projekt wählen", default_text="1", ok="Wählen",
+                         cancel="Abbrechen", dimensions=(340, 24)).run()
+        if not r.clicked:
+            return
+        try:
+            p = projs[int(r.text.strip()) - 1]
+        except (ValueError, IndexError):
+            rumps.notification("NXT Storage Scanner", "", "Ungültige Auswahl.")
+            return
+        self._set_active(p["id"], p["name"])
+
+    def ingest_card(self, _):
+        if not self._active_project:
+            rumps.notification("NXT Storage Scanner", "",
+                               "Erst ein Projekt wählen/anlegen.")
+            return
+        if self._ingest_busy:
+            rumps.notification("NXT Storage Scanner", "", "Ein Ingest läuft bereits.")
+            return
+
+        vols = device_monitor.list_volumes()
+        cards = [v for v in vols if device_monitor.classify(v) == "card"]
+        targets = [v for v in vols if device_monitor.classify(v) == "target"]
+        if not cards:
+            rumps.notification("NXT Storage Scanner", "", "Keine Kamera-Karte erkannt.")
+            return
+        card = cards[0]
+        card_root = Path(card["path"])
+
+        media = camera_map.discover_media(card_root)
+        files = media["video"] + media["photo"]
+        if not files:
+            rumps.notification("NXT Storage Scanner", "", "Karte enthält keine Medien.")
+            return
+
+        camera = camera_map.infer_camera_name(files)
+        if not camera:
+            vendor = camera_map.detect_vendor(card_root) or ""
+            r = rumps.Window(message="Kamera + Initialen (z. B. 'FX3 JO'):",
+                             title="Kartenbenennung", default_text=vendor,
+                             ok="Weiter", cancel="Abbrechen", dimensions=(300, 24)).run()
+            if not r.clicked or not r.text.strip():
+                return
+            camera = r.text.strip()
+
+        default_a = targets[0]["name"] if len(targets) >= 1 else ""
+        default_b = targets[1]["name"] if len(targets) >= 2 else ""
+        r = rumps.Window(message="Ziel A (Plattenname unter /Volumes):",
+                         title="Ziel A (1/2)", default_text=default_a, ok="Weiter",
+                         cancel="Abbrechen", dimensions=(300, 24)).run()
+        if not r.clicked or not r.text.strip():
+            return
+        ta = Path("/Volumes") / r.text.strip()
+        r = rumps.Window(message="Ziel B (zweite Platte, muss ungleich A sein):",
+                         title="Ziel B (2/2)", default_text=default_b, ok="Einlesen",
+                         cancel="Abbrechen", dimensions=(300, 24)).run()
+        if not r.clicked or not r.text.strip():
+            return
+        tb = Path("/Volumes") / r.text.strip()
+
+        if str(ta) == str(tb):
+            rumps.notification("NXT Storage Scanner", "",
+                               "Ziel A und B müssen unterschiedlich sein.")
+            return
+        if not ta.is_dir() or not tb.is_dir():
+            rumps.notification("NXT Storage Scanner", "",
+                               "Ein Ziel ist nicht gemountet.")
+            return
+
+        self._ingest_busy = True
+        self.ingest_item.title = "Karte einlesen... (läuft)"
+        threading.Thread(target=self._run_ingest_thread,
+                         args=(card, card_root, camera, ta, tb), daemon=True).start()
+
+    def _run_ingest_thread(self, card, card_root, camera, ta, tb):
+        conn = db.connect()
+        try:
+            project = store.project_payload(self._active_project["id"], conn)
+            proj_date = project.get("date") or date.today().isoformat()
+            label = card.get("name") or card_root.name
+            host = self._host_name()
+            sid = store.create_session(project["id"], label, 0, 0, host=host, conn=conn)
+            d1_projects.push_session_safe(store.session_payload(sid, conn))
+
+            result = orchestrator.run_ingest(
+                project, card_root, camera, proj_date, ta, tb,
+                conn=conn, session_id=sid, host=host)
+            d1_projects.push_session_safe(result)
+
+            if result.get("state") == "done":
+                rumps.notification(
+                    "NXT Storage Scanner", "Ingest fertig – 2x gesichert",
+                    f"{label} → {self._active_project['name']} (formatieren ok)")
+            else:
+                rumps.notification(
+                    "NXT Storage Scanner", "Ingest-Fehler",
+                    f"{label}: Status {result.get('state')}. NICHT formatieren.")
+        except Exception as e:  # noqa: BLE001 - Fehler im UI melden, App nicht crashen
+            rumps.notification("NXT Storage Scanner", "Ingest-Fehler", str(e))
+        finally:
+            conn.close()
+            self._ingest_busy = False
+            self.ingest_item.title = "Karte einlesen..."
 
     # ── Notion Einstellungen ────────────────────────────────────────
 
