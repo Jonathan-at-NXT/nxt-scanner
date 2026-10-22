@@ -184,6 +184,13 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
     }
 
     const copiesOverall = minCopies === Infinity ? 0 : minCopies;
+    const maxCopies = Math.max(0, ...types.map((t) => t.disks));
+    // Fehlender Teil: nur Ordnertypen unter der Regel zählen (nicht das ganze Projekt)
+    const missingGb = Math.round(types.filter((t) => t.disks < min).reduce((s, t) => s + t.size_gb, 0) * 100) / 100;
+    // Sicherungsstand: einfach = kein Teil hat eine zweite Kopie, teilweise = gemischt
+    const level = min <= 1 ? (copiesOverall >= min ? "ok" : "einfach")
+      : copiesOverall >= min ? (copiesOverall >= 3 ? "mehrfach" : "ok")
+      : maxCopies >= 2 ? "teilweise" : "einfach";
     out.push({
       id: cid, rule_key: rk || keys[0], date: members[0].date,
       name: members.map((m) => m.project_name).sort((a, b) => b.length - a.length)[0],
@@ -191,7 +198,8 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       types, size_gb: Math.round(sizeGb * 100) / 100,
       disks: [...new Set([...new Set(members.map((m) => m.disk_uuid))].map((u) => disk.get(u)?.name || u))],
       tiers: [...tiersPresent].sort(),
-      copies: copiesOverall, sicherung, sicherung_min: min, require_tiers: requireTiers,
+      copies: copiesOverall, copies_max: maxCopies, level, missing_gb: missingGb,
+      sicherung, sicherung_min: min, require_tiers: requireTiers,
       rule_note: rule?.note || null, rule_by: rule?.updated_by || null,
       ok: copiesOverall >= min && requireTiers.every((t) => tiersPresent.has(t)),
     });
@@ -216,15 +224,16 @@ function overview(projects, disks, findings) {
   const open = findings.filter((f) => f.status === "offen");
   const byPrio = { kritisch: 0, warnung: 0, info: 0 };
   for (const f of open) byPrio[f.priority]++;
-  const buckets = { "0": 0, "1": 0, "2": 0, "3+": 0 };
-  const bucketGb = { "0": 0, "1": 0, "2": 0, "3+": 0 };
+  // Sicherungsgrad: nur-1× (gar keine zweite Kopie), teilweise, 2×, 3+× (nach Mindest-Kopien je Typ)
+  const buckets = { einfach: 0, teilweise: 0, "2": 0, "3+": 0 };
+  const bucketGb = { einfach: 0, teilweise: 0, "2": 0, "3+": 0 };
   for (const p of projects) {
-    const k = p.copies >= 3 ? "3+" : String(p.copies);
+    const k = p.copies >= 3 ? "3+" : p.copies >= 2 ? "2" : p.copies_max >= 2 ? "teilweise" : "einfach";
     buckets[k]++; bucketGb[k] += p.size_gb;
   }
   const tierGb = {};
   for (const d of realDisks) { const t = d.tier || "unbekannt"; tierGb[t] = (tierGb[t] || 0) + (d.used_gb || 0); }
-  const unsecured = projects.filter((p) => p.copies < p.sicherung_min);
+  const unsecured = projects.filter((p) => p.missing_gb > 0);
   return {
     disks: realDisks.length,
     used_tb: Math.round(realDisks.reduce((s, d) => s + (d.used_gb || 0), 0) / 10) / 100,
@@ -232,10 +241,14 @@ function overview(projects, disks, findings) {
     projects: projects.length,
     ok: projects.filter((p) => p.ok).length,
     copies: buckets, copies_tb: Object.fromEntries(Object.entries(bucketGb).map(([k, v]) => [k, Math.round(v / 10) / 100])),
-    unsecured_tb: Math.round(unsecured.reduce((s, p) => s + p.size_gb, 0) / 10) / 100,
+    unsecured_tb: Math.round(unsecured.reduce((s, p) => s + p.missing_gb, 0) / 10) / 100,
+    unsecured_full: projects.filter((p) => p.level === "einfach").length,
+    unsecured_partial: projects.filter((p) => p.level === "teilweise").length,
     savings_tb: Math.round(open.filter((f) => f.type === "EXCESS_COPIES").reduce((s, f) => s + (f.savings_gb || 0), 0) / 10) / 100,
     findings: byPrio, tier_tb: Object.fromEntries(Object.entries(tierGb).map(([k, v]) => [k, Math.round(v / 10) / 100])),
-    next: unsecured.sort((a, b) => b.size_gb - a.size_gb).slice(0, 8)
-      .map((p) => ({ id: p.id, name: `${p.date} ${p.name}`, size_gb: p.size_gb, copies: p.copies, min: p.sicherung_min, disks: p.disks })),
+    next: unsecured.sort((a, b) => b.missing_gb - a.missing_gb).slice(0, 8)
+      .map((p) => ({ id: p.id, name: `${p.date} ${p.name}`, size_gb: p.size_gb, missing_gb: p.missing_gb, level: p.level,
+                     copies: p.copies, min: p.sicherung_min, disks: p.disks,
+                     missing_types: p.types.filter((t) => t.disks < p.sicherung_min).map((t) => t.type) })),
   };
 }

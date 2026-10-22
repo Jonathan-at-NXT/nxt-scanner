@@ -72,8 +72,8 @@
         <div class="panel kpi ${o.ok === o.projects ? "ok" : ""}"><div class="label">Projekte nach Regel gesichert</div>
           <div class="value num">${fmtN(o.ok)}<span class="faint" style="font-size:22px"> / ${fmtN(o.projects)}</span></div>
           <div class="sub">${Math.round((o.ok / Math.max(1, o.projects)) * 100)} % erfüllen ihre Sicherungsregel</div></div>
-        <a class="panel kpi crit" href="#/projekte?f=verletzt" style="text-decoration:none"><div class="label">Nicht ausreichend gesichert</div>
-          <div class="value num">${fmtTb(o.unsecured_tb)}</div><div class="sub">${fmtN(o.projects - o.ok)} Projekte · Liste ansehen →</div></a>
+        <a class="panel kpi crit" href="#/projekte?f=einfach" style="text-decoration:none"><div class="label">Fehlt noch als 2. Kopie</div>
+          <div class="value num">${fmtTb(o.unsecured_tb)}</div><div class="sub">${fmtN(o.unsecured_full)} Projekte nur 1× · ${fmtN(o.unsecured_partial)} teilweise →</div></a>
         <a class="panel kpi" href="#/befunde" style="text-decoration:none"><div class="label">Offene Befunde</div>
           <div class="value num"><span style="color:var(--crit)">${fmtN(o.findings.kritisch)}</span> <span class="faint" style="font-size:22px">kritisch</span></div>
           <div class="sub">${fmtN(o.findings.warnung)} Warnungen · ${fmtN(o.findings.info)} Infos</div></a>
@@ -84,16 +84,19 @@
       </div>
       <div class="grid two section">
         <div class="panel"><h3>Sicherungsgrad</h3>
-          <div class="stack">${seg("0", "c0")}${seg("1", "c1")}${seg("2", "c2")}${seg("3+", "c3")}</div>
+          <div class="stack">${seg("einfach", "c0")}${seg("teilweise", "c1")}${seg("2", "c2")}${seg("3+", "c3")}</div>
           <div class="legend">
-            <span><i class="c1"></i>1× · ${fmtN(o.copies["1"])} Projekte · ${fmtTb(o.copies_tb["1"])}</span>
+            <span><i class="c0"></i>Nur 1× · ${fmtN(o.copies.einfach)} Projekte · ${fmtTb(o.copies_tb.einfach)}</span>
+            <span><i class="c1"></i>Teilweise 2× · ${fmtN(o.copies.teilweise)} · ${fmtTb(o.copies_tb.teilweise)}</span>
             <span><i class="c2"></i>2× · ${fmtN(o.copies["2"])} · ${fmtTb(o.copies_tb["2"])}</span>
             <span><i class="c3"></i>3+× · ${fmtN(o.copies["3+"])} · ${fmtTb(o.copies_tb["3+"])}</span>
           </div>
+          <p class="hint">„Teilweise“: einige Ordnertypen sind doppelt gesichert, andere (z. B. WORKING) nur einmal.</p>
           <div class="section"><h3 style="color:var(--text-2);margin-bottom:10px">Als Nächstes sichern</h3>
             ${o.next.length ? `<table class="table"><tbody>${o.next.map((p) => `
-              <tr class="click" data-proj="${esc(p.id)}"><td><div class="name">${esc(p.name)}</div><div class="sub">${esc(p.disks.join(", "))}</div></td>
-              <td class="r num">${fmtGb(p.size_gb)}</td><td class="r"><span class="tc c-${Math.min(p.copies, 3)}"><b>${p.copies}×</b> / ${p.min}×</span></td></tr>`).join("")}
+              <tr class="click" data-proj="${esc(p.id)}"><td><div class="name">${esc(p.name)}</div>
+                <div class="sub">${p.level === "teilweise" ? "fehlt: " + esc(p.missing_types.join(", ")) + " · " : ""}${esc(p.disks.join(", "))}</div></td>
+              <td class="r num">${fmtGb(p.missing_gb)}</td><td class="r"><span class="tc ${p.level === "teilweise" ? "c-1" : "c-0"}"><b>${p.level === "teilweise" ? "teilweise" : "nur 1×"}</b></span></td></tr>`).join("")}
               </tbody></table>` : `<div class="empty">Alles nach Regel gesichert.</div>`}
           </div>
         </div>
@@ -110,7 +113,8 @@
     projekte(params) {
       if (params.get("f")) ui.proj.filter = params.get("f");
       const s = q();
-      const filters = { alle: () => true, verletzt: (p) => !p.ok, "1": (p) => p.copies <= 1, "2": (p) => p.copies === 2, "3": (p) => p.copies >= 3,
+      const filters = { alle: () => true, verletzt: (p) => !p.ok, einfach: (p) => p.level === "einfach", teilweise: (p) => p.level === "teilweise",
+        "2": (p) => p.copies === 2, "3": (p) => p.copies >= 3,
         regel: (p) => p.sicherung !== "doppelt" || p.require_tiers.length };
       const base = S.projects.filter((p) => matchProject(p, s));
       const list = base.filter(filters[ui.proj.filter] || filters.alle);
@@ -118,7 +122,7 @@
       const chip = (k, label) => `<button class="chip ${ui.proj.filter === k ? "on" : ""}" data-pf="${k}">${label}<span class="n">${fmtN(count(k))}</span></button>`;
       return `
       <div class="head"><div><h1>Projekte</h1><p>Alle Ordnertypen eines Projekts zusammengefasst, über alle Datenträger hinweg. Klick öffnet Details und Sicherungsregel.</p></div></div>
-      <div class="toolbar">${chip("alle", "Alle")}${chip("verletzt", "Regel nicht erfüllt")}${chip("1", "1×")}${chip("2", "2×")}${chip("3", "3+×")}${chip("regel", "Eigene Regel")}</div>
+      <div class="toolbar">${chip("alle", "Alle")}${chip("einfach", "Nur 1×")}${chip("teilweise", "Teilweise")}${chip("2", "2×")}${chip("3", "3+×")}${chip("verletzt", "Regel nicht erfüllt")}${chip("regel", "Eigene Regel")}</div>
       ${list.length ? `<table class="table"><thead><tr><th></th><th>Projekt</th><th>Ordnertypen &amp; Kopien</th><th class="r">Größe</th><th class="hide-m">Sicherung</th></tr></thead><tbody>
       ${list.slice(0, ui.proj.limit).map((p) => `<tr class="click" data-proj="${esc(p.id)}">
         <td style="width:20px">${statusDot(p)}</td>
@@ -215,7 +219,7 @@
     const p = S.projById.get(id); if (!p) return;
     const fs = (S.findByCluster.get(id) || []).sort((a, b) => ["kritisch", "warnung", "info"].indexOf(a.priority) - ["kritisch", "warnung", "info"].indexOf(b.priority));
     openDrawer(`
-      <div class="sub">${esc(p.date)} · ${fmtGb(p.size_gb)} · ${p.copies}× gesichert</div>
+      <div class="sub">${esc(p.date)} · ${fmtGb(p.size_gb)} · ${p.level === "teilweise" ? `teilweise gesichert, es fehlen ${fmtGb(p.missing_gb)}` : p.copies + "× gesichert"}</div>
       <h2>${esc(p.name)}</h2>
       ${p.aliases.length > 1 ? `<div class="sub">Auch geschrieben als: ${esc(p.aliases.join(" · "))}</div>` : ""}
       <div class="row" style="margin-top:10px">${statusDot(p)} <span class="muted">${p.ok ? "Erfüllt die Sicherungsregel" : "Erfüllt die Sicherungsregel nicht"}</span></div>
