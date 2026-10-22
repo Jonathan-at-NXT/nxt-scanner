@@ -111,6 +111,11 @@ def scan_and_sync(volume_name: str) -> bool:
         from .d1_client import push_safe
         if push_safe(str(report_path)):
             log.info(f"D1-Push abgeschlossen: {volume_name}")
+
+        # Datei-Katalog: nur lokal und nur wenn in der Config aktiviert
+        from .catalog import catalog_safe
+        from .notion_sync import load_config
+        catalog_safe(volume_path, load_config())
         return True
     except Exception as e:
         log.error(f"Fehler bei {volume_name}: {e}")
