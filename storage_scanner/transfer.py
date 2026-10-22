@@ -256,7 +256,7 @@ def check_space(plan_bytes: int, dst_roots: list[Path], margin: float = 0.02) ->
 # ── Jobs mit Journal ──────────────────────────────────────────────
 
 def connect(db_path=None) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path or JOURNAL_PATH))
+    conn = sqlite3.connect(str(db_path or JOURNAL_PATH), timeout=120)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     return conn

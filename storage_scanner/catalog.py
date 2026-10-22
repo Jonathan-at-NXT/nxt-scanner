@@ -90,7 +90,7 @@ def classify(name: str) -> tuple[str, str]:
 
 
 def connect(db_path=None) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path or CATALOG_DB_PATH))
+    conn = sqlite3.connect(str(db_path or CATALOG_DB_PATH), timeout=120)  # App + CLI parallel
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     return conn
