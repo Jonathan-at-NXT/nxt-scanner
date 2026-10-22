@@ -176,3 +176,16 @@ def test_hash_pass_prefix_only_hashes_project(tmp_path):
     assert r["hashed"] == 1
     hashed = {x[0] for x in conn.execute("SELECT rel_path FROM file WHERE fingerprint IS NOT NULL")}
     assert hashed == {"P_1/a.mp4"}
+
+
+def test_find_folders_across_volumes_and_depths(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    _write(a, "NXT STUDIOS/2025-04-01_LOCO CHIPS_FOOTAGE/FX3/C1.MP4", b"12")
+    _write(a, "NXT STUDIOS/2025-04-01_LOCO CHIPS_WORKING/x.drp", b"1")
+    _write(b, "2025-04-01_LOCO CHIPS_FOOTAGE/FX3/C1.MP4", b"12")
+    conn = catalog.connect(":memory:")
+    catalog.inventory(str(a), conn, vol=_vol("A", "NXT HUB 05"))
+    catalog.inventory(str(b), conn, vol=_vol("B", "TOWER 7"))
+    found = {(r["volume"], r["folder"]): r["files"] for r in catalog.find_folders(conn, "loco chips_footage")}
+    assert found == {("NXT HUB 05", "NXT STUDIOS/2025-04-01_LOCO CHIPS_FOOTAGE"): 1,
+                     ("TOWER 7", "2025-04-01_LOCO CHIPS_FOOTAGE"): 1}

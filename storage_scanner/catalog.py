@@ -445,6 +445,29 @@ def diff(conn: sqlite3.Connection, ref_vol: str, ref_prefix: str,
     return out
 
 
+def find_folders(conn: sqlite3.Connection, name: str) -> list[dict]:
+    """Alle Ordner (über alle Volumes), deren Name `name` enthält, mit Dateizahl und Größe.
+    Gedacht statt D1-rel_path: der reale Pfad kann einen Zwischenordner mehr haben
+    (z. B. "NXT STUDIOS/"), je nachdem wo ein Scan angesetzt hat."""
+    needle = name.lower()
+    agg: dict[tuple, list] = {}
+    rows = conn.execute(
+        """SELECT v.name, f.volume_uuid, f.rel_path, f.size FROM file f
+           JOIN volume v ON v.uuid=f.volume_uuid
+           WHERE f.present=1 AND instr(lower(f.rel_path), ?) > 0""", (needle,))
+    for vname, uuid, rel, size in rows:
+        parts = rel.split("/")[:-1]  # nur Ordner, nicht der Dateiname
+        for i, part in enumerate(parts):
+            if needle in part.lower():
+                key = (vname, uuid, "/".join(parts[:i + 1]))
+                a = agg.setdefault(key, [0, 0])
+                a[0] += 1
+                a[1] += size or 0
+                break  # äußersten passenden Ordner zählen
+    return [{"volume": k[0], "uuid": k[1], "folder": k[2], "files": v[0], "bytes": v[1]}
+            for k, v in sorted(agg.items())]
+
+
 # ── Einbindung in den Auto-Scan ───────────────────────────────────
 
 def catalog_safe(mount: str, config: dict) -> None:
@@ -493,6 +516,8 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p.add_argument("--limit", type=int, default=50)
     sub.add_parser("stats", help="Überblick pro Volume")
+    p = sub.add_parser("find", help="Projektordner per Namensteil auf allen Volumes finden")
+    p.add_argument("name")
     args = ap.parse_args(argv)
 
     conn = connect(args.db)
@@ -519,6 +544,9 @@ def main(argv=None):
             for key in ("missing", "mismatch"):
                 for item in r[key][:args.limit]:
                     print(f"  {key.upper():8} {item['path']}  ({_fmt(item['size'])})")
+    elif args.cmd == "find":
+        for r in find_folders(conn, args.name):
+            print(f"{r['volume']:16} {r['files']:>7} Dateien {_fmt(r['bytes']):>10}  {r['folder']!r}")
     elif args.cmd == "stats":
         rows = conn.execute(
             """SELECT v.name, v.uuid, v.device_serial, COUNT(f.id), COALESCE(SUM(f.size),0),
