@@ -5,6 +5,7 @@ berechnet Ordnergrößen/Dateianzahl und erzeugt einen JSON-Report.
 """
 
 import argparse
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -17,13 +18,21 @@ from .report import generate_report, save_report
 from .utils import format_size
 
 
-def _build_folder_tree(subfolders, scan_path) -> list[dict]:
+class ScanIncomplete(Exception):
+    """Scan hatte Lesefehler oder die Platte verschwand: Ergebnis wird nicht verwendet."""
+
+
+def _build_folder_tree(subfolders, scan_path, incomplete: list | None = None) -> list[dict]:
     """Baut den flachen folder_tree (disk-relative rel_paths) aus den
-    Top-Level-Ordnern. Netzlaufwerke: nur Top-Level (sub_depth=0)."""
+    Top-Level-Ordnern. Netzlaufwerke: nur Top-Level (sub_depth=0).
+    Ordner, deren Baum nicht ermittelt werden konnte, landen in `incomplete`."""
     sub_depth = 0 if is_network_volume(str(scan_path)) else 2
     tree = []
     for folder in subfolders:
-        for node in walk_tree(folder, sub_depth=sub_depth):
+        nodes = walk_tree(folder, sub_depth=sub_depth)
+        if not nodes and incomplete is not None:
+            incomplete.append(folder.name)
+        for node in nodes:
             if node["rel_path"] == "":
                 rel = folder.name
             else:
@@ -190,6 +199,9 @@ def run_scan(volume_path: str, output_path: str) -> None:
     Raises:
         FileNotFoundError: Wenn der Pfad nicht existiert.
         NotADirectoryError: Wenn der Pfad kein Verzeichnis ist.
+        ScanIncomplete: Bei Lesefehlern oder wenn die Platte während des Scans
+            verschwand. Der vorhandene (letzte gute) Report bleibt dann unangetastet;
+            das Teilergebnis liegt zur Analyse unter <report>.incomplete.json.
     """
     scan_path = Path(volume_path).resolve()
     out = Path(output_path).resolve()
@@ -212,11 +224,14 @@ def run_scan(volume_path: str, output_path: str) -> None:
 
     projects = []
     unassigned = []
+    incomplete: list[str] = []
 
     for folder in subfolders:
         try:
             validation = validate_folder(folder.name)
             stats = analyze_folder(folder)
+            if not stats.get("complete", True):
+                incomplete.append(folder.name)
 
             entry = {
                 "name": folder.name,
@@ -239,6 +254,8 @@ def run_scan(volume_path: str, output_path: str) -> None:
                         try:
                             child_validation = validate_folder(child_folder.name)
                             child_stats = analyze_folder(child_folder)
+                            if not child_stats.get("complete", True):
+                                incomplete.append(f"{folder.name}/{child_folder.name}")
                             child_entry = {
                                 "name": child_folder.name,
                                 "absolute_path": str(child_folder),
@@ -254,6 +271,7 @@ def run_scan(volume_path: str, output_path: str) -> None:
                             children.append(child_entry)
                         except OSError as e:
                             print(f"  Übersprungen (Fehler): {child_folder.name} – {e}")
+                            incomplete.append(f"{folder.name}/{child_folder.name}")
                             continue
                     entry["children"] = children
 
@@ -262,10 +280,23 @@ def run_scan(volume_path: str, output_path: str) -> None:
                 unassigned.append(entry)
         except OSError as e:
             print(f"  Übersprungen (Fehler): {folder.name} – {e}")
+            incomplete.append(folder.name)
             continue
 
     report = generate_report(str(scan_path), projects, unassigned)
-    report["folder_tree"] = _build_folder_tree(subfolders, scan_path)
+    report["folder_tree"] = _build_folder_tree(subfolders, scan_path, incomplete)
+
+    # Platte muss am Ende noch dieselbe sein (nicht abgezogen/neu gemountet)
+    if not os.path.ismount(scan_path) and str(scan_path).startswith("/Volumes/"):
+        incomplete.append("<Datenträger nicht mehr gemountet>")
+
+    report["scan_info"]["complete"] = not incomplete
+    report["scan_info"]["incomplete_folders"] = sorted(set(incomplete))
+    if incomplete:
+        save_report(report, out.with_name(out.stem + ".incomplete.json"))
+        raise ScanIncomplete(
+            f"Scan unvollständig ({len(set(incomplete))} Ordner nicht sicher lesbar, "
+            f"z. B. {sorted(set(incomplete))[0]}) – nichts hochgeladen")
     save_report(report, out)
 
 

@@ -16,30 +16,44 @@ def analyze_folder(path: Path) -> dict:
     """Berechnet rekursiv Ordnergröße (Bytes) und Dateianzahl.
 
     Nutzt 'du -sk' und 'find -type f' für schnelle Analyse auf großen HDDs.
-    Fällt auf Python os.scandir() zurück falls CLI-Tools fehlschlagen.
+    Fällt auf Python os.scandir() zurück falls die CLI-Tools fehlschlagen.
 
     Returns:
-        {"size_bytes": int, "file_count": int}
+        {"size_bytes": int, "file_count": int, "complete": bool}
+        complete=False heißt: Werte sind nicht vertrauenswürdig (Lesefehler,
+        Platte weg, Größe > 0 aber 0 Dateien) und dürfen nicht hochgeladen werden.
     """
     size_bytes = _du_size(str(path))
     file_count = _find_count(str(path))
+    complete = True
 
     # Fallback auf Python wenn CLI fehlschlägt
     if size_bytes is None or file_count is None:
-        size_ref, count_ref = [0], [0]
-        try:
-            _scan_recursive(str(path), size_ref, count_ref)
-        except PermissionError:
-            pass
+        size_ref, count_ref, errors = [0], [0], []
+        _scan_recursive(str(path), size_ref, count_ref, errors)
+        if errors:
+            complete = False
         if size_bytes is None:
             size_bytes = size_ref[0]
         if file_count is None:
             file_count = count_ref[0]
 
+    if size_bytes > 1024 * 1024 and file_count == 0:
+        complete = False  # Daten laut du, aber keine Datei gezählt -> Zählung kaputt
+    if not os.path.isdir(path):
+        complete = False
+
     return {
         "size_bytes": size_bytes,
         "file_count": file_count,
+        "complete": complete,
     }
+
+
+def _real_errors(stderr_text: str) -> list[str]:
+    """Fehlerzeilen von find/du ohne harmlose 'Permission denied' (z. B. .Trashes)."""
+    return [ln for ln in stderr_text.splitlines()
+            if ln.strip() and "Permission denied" not in ln and "Operation not permitted" not in ln]
 
 
 def _du_size(path: str) -> int | None:
@@ -63,21 +77,30 @@ def _du_size(path: str) -> int | None:
 
 
 def _find_count(path: str) -> int | None:
-    """Dateianzahl via 'find -type f | wc -l' (schneller als Python-Rekursion)."""
+    """Dateianzahl via 'find -type f | wc -l' (schneller als Python-Rekursion).
+
+    None, wenn find mit echten Lesefehlern endet (sonst würde ein Teil-/Nullergebnis
+    als gültig gelten)."""
+    import tempfile
     find_proc = None
     wc_proc = None
     try:
-        find_proc = subprocess.Popen(
-            ["find", path, "-type", "f"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        )
-        wc_proc = subprocess.Popen(
-            ["wc", "-l"],
-            stdin=find_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        )
-        find_proc.stdout.close()
-        output, _ = wc_proc.communicate(timeout=120)
-        find_proc.wait(timeout=5)
+        with tempfile.TemporaryFile() as err:
+            find_proc = subprocess.Popen(
+                ["find", path, "-type", "f"],
+                stdout=subprocess.PIPE, stderr=err,
+            )
+            wc_proc = subprocess.Popen(
+                ["wc", "-l"],
+                stdin=find_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            find_proc.stdout.close()
+            output, _ = wc_proc.communicate(timeout=120)
+            rc = find_proc.wait(timeout=5)
+            err.seek(0)
+            errors = _real_errors(err.read().decode("utf-8", "replace"))
+        if rc != 0 and errors:
+            return None
         return int(output.strip())
     except (subprocess.TimeoutExpired, ValueError, OSError):
         for proc in (find_proc, wc_proc):
@@ -89,8 +112,9 @@ def _find_count(path: str) -> int | None:
     return None
 
 
-def _scan_recursive(path: str, size_ref: list[int], count_ref: list[int]) -> None:
-    """Fallback: Rekursiver Scan mit os.scandir()."""
+def _scan_recursive(path: str, size_ref: list[int], count_ref: list[int],
+                    errors: list | None = None) -> None:
+    """Fallback: Rekursiver Scan mit os.scandir(). Echte Lesefehler landen in errors."""
     try:
         with os.scandir(path) as entries:
             for entry in entries:
@@ -99,11 +123,17 @@ def _scan_recursive(path: str, size_ref: list[int], count_ref: list[int]) -> Non
                         size_ref[0] += entry.stat(follow_symlinks=False).st_size
                         count_ref[0] += 1
                     elif entry.is_dir(follow_symlinks=False):
-                        _scan_recursive(entry.path, size_ref, count_ref)
-                except (PermissionError, OSError):
+                        _scan_recursive(entry.path, size_ref, count_ref, errors)
+                except PermissionError:
                     continue
-    except (PermissionError, OSError):
+                except OSError as e:
+                    if errors is not None:
+                        errors.append(f"{entry.path}: {e}")
+    except PermissionError:
         pass
+    except OSError as e:
+        if errors is not None:
+            errors.append(f"{path}: {e}")
 
 
 def is_network_volume(path: str) -> bool:
@@ -132,7 +162,7 @@ def walk_tree(root, sub_depth: int = 2, timeout: int = 180) -> list[dict]:
 
     depth 0 == root selbst (rel_path ""). Größen via 'du -d', Dateizahlen via
     'find'. Größen/Dateizahlen sind kumulativ (ganzer Teilbaum). Leere Liste bei
-    Timeout/Fehler.
+    Timeout/Fehler (auch bei Lesefehlern von find) - Aufrufer wertet das als unvollständig.
     """
     root = Path(root)
     root_str = os.path.normpath(str(root))
@@ -162,12 +192,14 @@ def walk_tree(root, sub_depth: int = 2, timeout: int = 180) -> list[dict]:
         return []
 
     # 2) Dateizahlen kumulativ je Knoten (find -> Vorfahren bis sub_depth zählen)
+    import tempfile
     counts = defaultdict(int)
     find_proc = None
+    err = tempfile.TemporaryFile()
     try:
         find_proc = subprocess.Popen(
             ["find", root_str, "-type", "f"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=err,
         )
         for bline in find_proc.stdout:
             fpath = os.path.normpath(bline.decode("utf-8", "replace").rstrip("\n"))
@@ -179,13 +211,19 @@ def walk_tree(root, sub_depth: int = 2, timeout: int = 180) -> list[dict]:
             for seg in parts[:sub_depth]:
                 acc = os.path.join(acc, seg)
                 counts[acc] += 1
-        find_proc.wait(timeout=timeout)
+        rc = find_proc.wait(timeout=timeout)
+        err.seek(0)
+        if rc != 0 and _real_errors(err.read().decode("utf-8", "replace")):
+            return []  # Lesefehler: lieber kein Baum als ein falscher
     except (subprocess.TimeoutExpired, OSError):
         if find_proc is not None:
             try:
                 find_proc.kill()
             except OSError:
                 pass
+        return []
+    finally:
+        err.close()
 
     # 3) Knoten bauen
     nodes = []
