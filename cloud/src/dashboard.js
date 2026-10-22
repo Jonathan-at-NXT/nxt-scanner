@@ -79,34 +79,71 @@ async function readBody(request) {
 
 async function handleWrite(path, body, env, user) {
   const who = user.email;
+  // Teil-Updates: nur Felder, die im Body stehen, werden geändert. Alles andere bleibt,
+  // damit ein Formular nie versehentlich bestehende Werte mit "nichts" überschreibt.
   if (path === "/api/rule") {
     const key = clean(body.rule_key, 300);
-    const sicherung = body.sicherung;
-    if (!key || !(sicherung in SICHERUNG)) throw new Error("Regel unvollständig");
-    const tiers = (Array.isArray(body.require_tiers) ? body.require_tiers : []).filter((t) => TIERS.includes(t));
+    if (!key) throw new Error("Projekt fehlt");
+    const cur = (await env.DB.prepare("SELECT * FROM project_rule WHERE rule_key=?").bind(key).first()) || {};
+    const next = { sicherung: cur.sicherung || "doppelt", require_tiers: cur.require_tiers || "", note: cur.note ?? null };
+    const changed = {};
+    if ("sicherung" in body) {
+      if (!(body.sicherung in SICHERUNG)) throw new Error("Unbekannte Sicherung");
+      if (body.sicherung !== next.sicherung) changed.sicherung = [next.sicherung, body.sicherung];
+      next.sicherung = body.sicherung;
+    }
+    if ("require_tiers" in body) {
+      const tiers = (Array.isArray(body.require_tiers) ? body.require_tiers : []).filter((t) => TIERS.includes(t)).join(",");
+      if (tiers !== next.require_tiers) changed.require_tiers = [next.require_tiers, tiers];
+      next.require_tiers = tiers;
+    }
+    if ("note" in body) {
+      const n = clean(body.note);
+      if (n !== next.note) changed.note = [next.note, n];
+      next.note = n;
+    }
+    if (!Object.keys(changed).length) return { ok: true, unchanged: true };
     await env.DB.prepare(
       `INSERT INTO project_rule(rule_key, sicherung, require_tiers, note, updated_by, updated_at) VALUES(?,?,?,?,?,?)
        ON CONFLICT(rule_key) DO UPDATE SET sicherung=excluded.sicherung, require_tiers=excluded.require_tiers,
          note=excluded.note, updated_by=excluded.updated_by, updated_at=excluded.updated_at`
-    ).bind(key, sicherung, tiers.join(","), clean(body.note), who, now()).run();
-    await audit(env, who, "regel", key, { sicherung, require_tiers: tiers, note: clean(body.note) });
+    ).bind(key, next.sicherung, next.require_tiers, next.note, who, now()).run();
+    await audit(env, who, "regel", key, changed);
     return { ok: true };
   }
   if (path === "/api/disk") {
     const uuid = clean(body.disk_uuid, 100);
     if (!uuid) throw new Error("Datenträger fehlt");
-    const tier = body.tier == null || body.tier === "" ? null : body.tier;
-    if (tier && !TIERS.includes(tier)) throw new Error("Unbekannte Stufe");
+    const cur = (await env.DB.prepare("SELECT * FROM disk_meta WHERE disk_uuid=?").bind(uuid).first()) || {};
+    const next = { tier: cur.tier ?? null, tier_source: cur.tier_source ?? null, holder: cur.holder ?? null,
+                   location: cur.location ?? null, note: cur.note ?? null, separate_disk: cur.separate_disk ? 1 : 0 };
+    const changed = {};
+    if ("tier" in body) {
+      if (!TIERS.includes(body.tier)) throw new Error("Bitte eine Speicherstufe wählen");
+      if (body.tier !== next.tier || next.tier_source !== "manual") changed.tier = [next.tier, body.tier];
+      next.tier = body.tier; next.tier_source = "manual";
+    }
+    for (const [f, max] of [["holder", 100], ["location", 200], ["note", 500]]) {
+      if (f in body) {
+        const v = clean(body[f], max);
+        if (v !== next[f]) changed[f] = [next[f], v];
+        next[f] = v;
+      }
+    }
+    if ("separate_disk" in body) {
+      const v = body.separate_disk ? 1 : 0;
+      if (v !== next.separate_disk) changed.separate_disk = [next.separate_disk, v];
+      next.separate_disk = v;
+    }
+    if (!Object.keys(changed).length) return { ok: true, unchanged: true };
     await env.DB.prepare(
       `INSERT INTO disk_meta(disk_uuid, tier, tier_source, holder, location, note, separate_disk, updated_by, updated_at)
        VALUES(?,?,?,?,?,?,?,?,?)
        ON CONFLICT(disk_uuid) DO UPDATE SET tier=excluded.tier, tier_source=excluded.tier_source, holder=excluded.holder,
          location=excluded.location, note=excluded.note, separate_disk=excluded.separate_disk,
          updated_by=excluded.updated_by, updated_at=excluded.updated_at`
-    ).bind(uuid, tier, tier ? "manual" : null, clean(body.holder, 100), clean(body.location, 200), clean(body.note),
-           body.separate_disk ? 1 : 0, who, now()).run();
-    await audit(env, who, "datentraeger", uuid, { tier, holder: clean(body.holder), location: clean(body.location),
-                                                 note: clean(body.note), separate_disk: !!body.separate_disk });
+    ).bind(uuid, next.tier, next.tier_source, next.holder, next.location, next.note, next.separate_disk, who, now()).run();
+    await audit(env, who, "datentraeger", uuid, changed);
     return { ok: true };
   }
   if (path === "/api/override") {

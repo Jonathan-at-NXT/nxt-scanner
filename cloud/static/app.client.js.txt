@@ -40,6 +40,15 @@
     if (!r.ok) throw new Error(j.error || "Fehler");
     return j;
   }
+  /** Nur Felder zurückgeben, die sich gegenüber dem Ausgangswert geändert haben. */
+  function diff(initial, current) {
+    const out = {};
+    for (const k of Object.keys(current)) {
+      const a = initial[k], b = current[k];
+      if (JSON.stringify(Array.isArray(a) ? [...a].sort() : a ?? "") !== JSON.stringify(Array.isArray(b) ? [...b].sort() : b ?? "")) out[k] = b;
+    }
+    return out;
+  }
   function toast(msg, bad = false) {
     const t = $("#toast"); t.textContent = msg; t.className = "toast show" + (bad ? " bad" : "");
     clearTimeout(toast.t); toast.t = setTimeout(() => (t.className = "toast"), 2600);
@@ -245,8 +254,11 @@
     $("#rule-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const changes = diff({ sicherung: p.sicherung, require_tiers: p.require_tiers, note: p.rule_note || "" },
+                           { sicherung: fd.get("sicherung"), require_tiers: fd.getAll("tier"), note: fd.get("note").trim() });
+      if (!Object.keys(changes).length) { toast("Keine Änderung"); return; }
       try {
-        await post("/api/rule", { rule_key: p.rule_key, sicherung: fd.get("sicherung"), require_tiers: fd.getAll("tier"), note: fd.get("note") });
+        await post("/api/rule", { rule_key: p.rule_key, ...changes });
         toast("Regel gespeichert"); await load(); render(); projectDrawer(id);
       } catch (err) { toast(err.message, true); }
     });
@@ -262,9 +274,10 @@
       <div class="sub">Zuletzt gescannt ${rel(d.last_scan)} von ${esc(d.last_user || "?")}</div>
       <div class="block"><h3>Angaben</h3>
         <form class="form" id="disk-form">
-          <label class="field">Speicherstufe<select name="tier"><option value="">– unbekannt –</option>${S.meta.tiers.map((t) => `<option ${d.tier === t && d.tier_source !== "guess" ? "selected" : ""}>${t}</option>`).join("")}</select>
-            ${d.tier_source === "guess" ? `<span class="hint">Aktuell geschätzt: ${esc(d.tier)}. Bitte bestätigen.</span>` : ""}</label>
-          <label class="field">Wer hat sie<input type="text" name="holder" maxlength="100" value="${esc(d.holder_source === "manual" ? d.holder : "")}" placeholder="${esc(d.last_user ? "zuletzt gescannt von " + d.last_user : "Name")}"></label>
+          <label class="field">Speicherstufe<select name="tier">${d.tier ? "" : '<option value="" selected disabled>– bitte wählen –</option>'}${S.meta.tiers.map((t) => `<option ${d.tier === t ? "selected" : ""}>${t}</option>`).join("")}</select>
+            ${d.tier_source === "guess" ? `<label class="hint" style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="confirm_tier"> Aus dem Namen geschätzt – beim Speichern als richtig bestätigen</label>` : ""}</label>
+          <label class="field">Wer hat sie<input type="text" name="holder" maxlength="100" value="${esc(d.holder || "")}" placeholder="Name">
+            ${d.holder_source === "scan" && d.holder ? '<span class="hint">aus dem letzten Scan</span>' : ""}</label>
           <label class="field">Standort<input type="text" name="location" maxlength="200" value="${esc(d.location || "")}" placeholder="z. B. Regal B3, Büro, extern bei Jonathan"></label>
           <label class="field">Notiz<input type="text" name="note" maxlength="500" value="${esc(d.note || "")}"></label>
           ${d.duplicate_name ? `<div class="checks"><label><input type="checkbox" name="separate" ${d.separate_disk ? "checked" : ""}> Eigene physische Platte (trotz gleichem Namen als Kopie zählen)</label></div>
@@ -278,9 +291,14 @@
     $("#disk-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const changes = diff({ tier: d.tier || "", holder: d.holder || "", location: d.location || "", note: d.note || "", separate_disk: !!d.separate_disk },
+                           { tier: fd.get("tier") || "", holder: fd.get("holder").trim(), location: fd.get("location").trim(), note: fd.get("note").trim(),
+                             separate_disk: d.duplicate_name ? fd.get("separate") === "on" : !!d.separate_disk });
+      if (fd.get("confirm_tier") === "on" && fd.get("tier")) changes.tier = fd.get("tier");
+      if ("tier" in changes && !changes.tier) delete changes.tier;   // nie auf "nichts" setzen
+      if (!Object.keys(changes).length) { toast("Keine Änderung"); return; }
       try {
-        await post("/api/disk", { disk_uuid: uuid, tier: fd.get("tier") || null, holder: fd.get("holder"), location: fd.get("location"),
-                                  note: fd.get("note"), separate_disk: fd.get("separate") === "on" });
+        await post("/api/disk", { disk_uuid: uuid, ...changes });
         toast("Gespeichert"); await load(); render(); diskDrawer(uuid);
       } catch (err) { toast(err.message, true); }
     });
