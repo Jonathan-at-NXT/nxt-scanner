@@ -148,6 +148,7 @@ test("runNotionSync: nur Platten mit neuem Scan, Stand wird gemerkt", async () =
     prepare(sql) {
       const st = { args: [], bind(...a) { st.args = a; return st; },
         async all() {
+          if (sql.includes("GROUP BY name")) return { results: [{ name: disk.name, uuid: disk.uuid, last_scan: disk.last_scan }] };
           if (sql.includes("FROM disks")) return { results: state.get("U1") === disk.last_scan ? [] : [disk] };
           return { results: nodes };
         },
@@ -202,4 +203,33 @@ test("syncDisk: Zuordnung über Pfad, auch wenn Projekt-Relation in beide Richtu
   const r = await syncDisk(notion, ids, disk, tree);
   assert.equal(r.created, 0);
   assert.equal(r.archived, 0);
+});
+
+test("syncDisk überschreibt nie neuere Notion-Daten", async () => {
+  const notion = fakeNotion();
+  notion.dbs.HDD.push(toPage("H", { "Name": { title: [{ text: { content: "TOWER 7" } }] },
+    "Letzter Scan": { date: { start: "2026-12-01T00:00:00+01:00" } } }));
+  const r = await syncDisk(notion, ids, disk, nodes);
+  assert.equal(r.skipped, "notion_newer");
+  assert.equal(notion.log.length, 0);
+});
+
+test("runNotionSync: bei Namensdoppel spiegelt nur die neueste Platte", async () => {
+  const old = { ...disk, uuid: "OLD", last_scan: "2026-09-03T13:27:00+02:00" };
+  const db = {
+    prepare(sql) {
+      const st = { bind() { return st; },
+        async all() {
+          if (sql.includes("GROUP BY name")) return { results: [{ name: disk.name, uuid: disk.uuid }] };
+          if (sql.includes("FROM disks")) return { results: [old, disk] };
+          return { results: nodes };
+        },
+        async run() { return {}; } };
+      return st;
+    },
+  };
+  const env = { DB: db, NOTION_TOKEN: "t", HDD_DB_ID: "HDD", SPEICHERUNGEN_DB_ID: "SP" };
+  const r = await runNotionSync(env, { notion: fakeNotion(), dry: true });
+  assert.deepEqual(r.skipped.map((x) => x.uuid), ["OLD"]);
+  assert.deepEqual(r.disks.map((x) => x.uuid), ["U1"]);
 });

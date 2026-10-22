@@ -246,6 +246,11 @@ export async function syncDisk(notion, ids, disk, nodes, { dry = false } = {}) {
   // Datenträger-Seite: per Titel (wie bisher)
   const hddPages = await notion.queryAll(ids.hdd, { property: "Name", title: { equals: disk.name } });
   let hddId = hddPages[0]?.id;
+  // Nie neuere Notion-Daten mit älterem D1-Stand überschreiben (z. B. Scanner ohne D1-Token)
+  const notionScan = hddPages[0]?.properties?.["Letzter Scan"]?.date?.start;
+  if (hddId && notionScan && disk.last_scan && Date.parse(notionScan) > Date.parse(disk.last_scan) + 60000) {
+    return { ...res, skipped: "notion_newer", notion_scan: notionScan, hdd_page_id: hddId };
+  }
   if (hddId) {
     const diff = changedProps(hddPages[0], view.hdd);
     if (Object.keys(diff).length) {
@@ -339,23 +344,36 @@ export async function runNotionSync(env, { dry = false, onlyDisk = null, maxCall
            AND (s.synced_scan IS NULL OR s.synced_scan <> d.last_scan)
          ORDER BY d.last_scan ASC`);
   const disks = (await q.all()).results || [];
-  const report = { disks: [], pending: disks.length, calls: 0 };
+  const report = { disks: [], pending: disks.length, calls: 0, skipped: [] };
+
+  // Gleicher Plattenname, verschiedene UUIDs (Klon, Neuformatierung, Namensdoppel):
+  // in Notion gibt es nur EINE Seite je Name -> nur die Platte mit dem neuesten Scan spiegelt.
+  const newestByName = new Map(
+    ((await env.DB.prepare(
+      `SELECT name, uuid, MAX(last_scan) AS last_scan FROM disks
+       WHERE uuid NOT LIKE 'name:%' AND last_scan IS NOT NULL GROUP BY name`).all()).results || [])
+      .map((r) => [r.name, r.uuid]));
 
   for (const disk of disks) {
     if (client.stats.calls >= maxCalls) break; // Rest im nächsten Lauf
+    const owner = newestByName.get(disk.name);
+    if (owner && owner !== disk.uuid) {
+      report.skipped.push({ name: disk.name, uuid: disk.uuid, reason: "duplicate_name_older", newer_uuid: owner });
+      report.pending--;
+      if (!dry) await markSynced(env, disk, null, "übersprungen: gleicher Name, neuere Platte " + owner);
+      continue;
+    }
     const nodes = (await env.DB.prepare(
       `SELECT rel_path, depth, parent_rel_path, size_bytes, file_count, mtime, abs_path
        FROM folder_tree WHERE disk_uuid=? AND depth IN (1,2)`).bind(disk.uuid).all()).results || [];
     try {
       const r = await syncDisk(client, ids, disk, nodes, { dry });
-      report.disks.push({ name: disk.name, uuid: disk.uuid, ...r, ops: dry ? r.ops : undefined });
-      if (!dry) {
-        await env.DB.prepare(
-          `INSERT INTO notion_sync_state(disk_uuid, synced_scan, hdd_page_id, synced_at, last_error)
-           VALUES(?,?,?,?,NULL)
-           ON CONFLICT(disk_uuid) DO UPDATE SET synced_scan=excluded.synced_scan,
-             hdd_page_id=excluded.hdd_page_id, synced_at=excluded.synced_at, last_error=NULL`
-        ).bind(disk.uuid, disk.last_scan, r.hdd_page_id, new Date().toISOString()).run();
+      if (r.skipped) {
+        report.skipped.push({ name: disk.name, uuid: disk.uuid, reason: r.skipped, notion_scan: r.notion_scan });
+        if (!dry) await markSynced(env, disk, r.hdd_page_id, "übersprungen: Notion neuer (" + r.notion_scan + ")");
+      } else {
+        report.disks.push({ name: disk.name, uuid: disk.uuid, ...r, ops: dry ? r.ops : undefined });
+        if (!dry) await markSynced(env, disk, r.hdd_page_id, null);
       }
       report.pending--;
     } catch (e) {
@@ -370,4 +388,14 @@ export async function runNotionSync(env, { dry = false, onlyDisk = null, maxCall
   }
   report.calls = client.stats.calls;
   return report;
+}
+
+async function markSynced(env, disk, hddPageId, note) {
+  await env.DB.prepare(
+    `INSERT INTO notion_sync_state(disk_uuid, synced_scan, hdd_page_id, synced_at, last_error)
+     VALUES(?,?,?,?,?)
+     ON CONFLICT(disk_uuid) DO UPDATE SET synced_scan=excluded.synced_scan,
+       hdd_page_id=COALESCE(excluded.hdd_page_id, notion_sync_state.hdd_page_id),
+       synced_at=excluded.synced_at, last_error=excluded.last_error`
+  ).bind(disk.uuid, disk.last_scan, hddPageId, new Date().toISOString(), note).run();
 }
