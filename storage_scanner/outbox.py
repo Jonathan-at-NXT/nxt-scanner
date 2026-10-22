@@ -82,12 +82,23 @@ def _send_d1(report: str, user_name: str) -> None:
         raise RuntimeError("D1-Push ohne 2xx")
 
 
-SENDERS = {"d1": _send_d1}
+def _send_notion(report: str, user_name: str) -> None:
+    """Nur Rückfall für Macs ohne D1-Token (sonst spiegelt der Worker nach Notion)."""
+    from .notion_sync import run_sync
+    run_sync(report)
+
+
+SENDERS = {"d1": _send_d1, "notion": _send_notion}
 
 
 def channels_for(config: dict) -> list[str]:
-    """Nur Kanäle, die auf diesem Mac eingerichtet sind (Notion macht der Worker)."""
-    return ["d1"] if config.get("d1_ingest_url") and config.get("d1_token") else []
+    """D1, wenn eingerichtet (Notion spiegelt dann der Worker). Ohne D1-Token, aber
+    mit Notion-Zugang: wie bisher direkt nach Notion, damit kein Scan verloren geht."""
+    if config.get("d1_ingest_url") and config.get("d1_token"):
+        return ["d1"]
+    if config.get("notion_token"):
+        return ["notion"]
+    return []
 
 
 def flush(path: Path = QUEUE_PATH, senders: dict | None = None) -> dict:

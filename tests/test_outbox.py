@@ -105,8 +105,9 @@ def test_missing_report_is_dropped(tmp_path):
 
 def test_channels_follow_config():
     assert outbox.channels_for({}) == []
-    assert outbox.channels_for({"notion_token": "x"}) == []   # Notion macht der Worker
+    assert outbox.channels_for({"notion_token": "x"}) == ["notion"]   # Rückfall ohne D1
     assert outbox.channels_for({"d1_ingest_url": "u", "d1_token": "t"}) == ["d1"]
+    assert outbox.channels_for({"notion_token": "x", "d1_ingest_url": "u", "d1_token": "t"}) == ["d1"]
 
 
 def test_enqueue_without_channels_is_noop(tmp_path):
