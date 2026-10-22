@@ -113,33 +113,42 @@ def _diskutil(target: str) -> dict:
     return {}
 
 
-def _usb_serials() -> dict[str, str]:
-    """bsd_name der ganzen Platte -> Seriennummer des USB-Geräts (best effort)."""
+# Platzhalter, die billige USB-SATA-Bridges statt einer echten Nummer melden
+_BOGUS_SERIALS = {"0123456789ABCDEF", "123456789ABC", "000000000000", "NOT PROVIDED",
+                  "0000000000000000", "1234567890ABCDEF"}
+
+
+def _plausible_serial(serial: str | None) -> bool:
+    s = (serial or "").strip().upper()
+    return len(s) >= 6 and s not in _BOGUS_SERIALS and len(set(s)) > 2
+
+
+def parse_ioreg_serials(text: str) -> dict[str, str]:
+    """ganze Platte (disk4) -> USB-Seriennummer des Gehäuses, aus `ioreg -c IOUSBHostDevice -r -l`.
+    Die Nummer steht im Baum immer vor den BSD-Namen ihrer Platten."""
     out: dict[str, str] = {}
-    for dtype in ("SPUSBHostDataType", "SPUSBDataType"):
-        try:
-            r = subprocess.run(["system_profiler", dtype, "-json"],
-                               capture_output=True, timeout=60)
-            data = json.loads(r.stdout or b"{}")
-        except (subprocess.TimeoutExpired, OSError, ValueError):
-            continue
-        _collect_serials(data, None, out)
-        if out:
-            break
+    serial = None
+    for line in text.splitlines():
+        if line.startswith("+-o "):
+            serial = None  # neues USB-Gerät auf oberster Ebene
+        if '"USB Serial Number" = "' in line:
+            serial = line.split('"USB Serial Number" = "', 1)[1].split('"', 1)[0]
+        elif '"BSD Name" = "disk' in line:
+            bsd = line.split('"BSD Name" = "', 1)[1].split('"', 1)[0]
+            if "s" not in bsd[4:] and _plausible_serial(serial):
+                out.setdefault(bsd, serial)
     return out
 
 
-def _collect_serials(node, serial, out: dict) -> None:
-    if isinstance(node, dict):
-        serial = node.get("serial_num") or node.get("USB Serial Number") or serial
-        bsd = node.get("bsd_name")
-        if bsd and serial and "s" not in bsd[4:]:  # nur ganze Platten (disk4, nicht disk4s1)
-            out.setdefault(bsd, serial)
-        for v in node.values():
-            _collect_serials(v, serial, out)
-    elif isinstance(node, list):
-        for v in node:
-            _collect_serials(v, serial, out)
+def _usb_serials() -> dict[str, str]:
+    """bsd_name der ganzen Platte -> Seriennummer des USB-Geräts (best effort).
+    Platzhalter-Nummern billiger Bridges werden verworfen (nicht eindeutig)."""
+    try:
+        r = subprocess.run(["ioreg", "-c", "IOUSBHostDevice", "-r", "-l", "-w0"],
+                           capture_output=True, timeout=60, text=True, errors="replace")
+        return parse_ioreg_serials(r.stdout)
+    except (subprocess.TimeoutExpired, OSError):
+        return {}
 
 
 def volume_info(mount: str, serials: dict | None = None) -> dict:

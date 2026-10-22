@@ -144,12 +144,18 @@ def test_catalog_safe_is_opt_in(tmp_path, monkeypatch):
     assert called == []
 
 
-def test_collect_serials_only_whole_disks():
-    data = {"SPUSBHostDataType": [{"_items": [{
-        "serial_num": "S123", "Media": [{"bsd_name": "disk4", "volumes": [{"bsd_name": "disk4s1"}]}]}]}]}
-    out = {}
-    catalog._collect_serials(data, None, out)
-    assert out == {"disk4": "S123"}
+def test_parse_ioreg_serials_maps_whole_disks_and_drops_placeholders():
+    text = """+-o USB3.1 Hub@02200000  <class IOUSBHostDevice>
+  | |   |   "USB Product Name" = "USB to ATA/ATAPI Bridge"
+  | |   |   "USB Serial Number" = "0123456789ABCDEF"
+  | |   |                 |   "BSD Name" = "disk4"
+  | |   |                         |   "BSD Name" = "disk5"
+  | |   |   "USB Product Name" = "Elements 25A3"
+  | |   |   "USB Serial Number" = "504E47315A394C50"
+  | |   |                 |   "BSD Name" = "disk6"
+  | |   |                 |   "BSD Name" = "disk6s1"
+"""
+    assert catalog.parse_ioreg_serials(text) == {"disk6": "504E47315A394C50"}
 
 
 def test_missing_mount_is_rejected_without_db_entry(tmp_path):
