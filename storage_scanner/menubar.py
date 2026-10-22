@@ -123,7 +123,6 @@ class StorageScannerApp(rumps.App):
 
         menu_items = [
             self.name_item,
-            self.notion_item,
             self.d1_item,
             None,
             self.new_project_item,
@@ -141,6 +140,7 @@ class StorageScannerApp(rumps.App):
             self.scan_all_item,
         ]
         if self._admin_mode:
+            menu_items.insert(1, self.notion_item)
             menu_items.append(self.analysis_item)
             menu_items.append(self.fullfilment_item)
         menu_items.extend([
@@ -851,15 +851,17 @@ class StorageScannerApp(rumps.App):
 
 
 def ask_for_setup() -> None:
-    """Fragt beim ersten Start nach Name, Notion-Token und Parent Page ID."""
+    """Fragt beim ersten Start nach dem Namen. Notion-Zugang nur noch im Admin-Modus
+    (Auswertung/Fullfilment); den Notion-Spiegel der Scans macht der Worker aus D1."""
     config = load_config()
     changed = False
+    admin = config.get("admin_mode", False) is True
 
     # Name
     if not config.get("user_name"):
         response = rumps.Window(
             message="Bitte gib deinen Namen ein.\nSo tracken wir, wer zuletzt welche SSD genutzt hat.",
-            title="NXT Storage Scanner – Setup (1/3)",
+            title="NXT Storage Scanner – Setup",
             default_text="",
             ok="Weiter",
             cancel=False,
@@ -870,12 +872,12 @@ def ask_for_setup() -> None:
             config["user_name"] = name
             changed = True
 
-    # Notion Token
-    if not config.get("notion_token"):
+    # Notion Token (nur Admin)
+    if admin and not config.get("notion_token"):
         response = rumps.Window(
             message="Notion Integration Token eingeben.\n"
                     "(Notion Settings → Connections → Develop or manage integrations)",
-            title="NXT Storage Scanner – Setup (2/3)",
+            title="NXT Storage Scanner – Admin-Setup (Notion 1/2)",
             default_text="",
             ok="Weiter",
             cancel=False,
@@ -886,13 +888,13 @@ def ask_for_setup() -> None:
             config["notion_token"] = token
             changed = True
 
-    # Parent Page ID
-    if not config.get("notion_parent_page_id"):
+    # Parent Page ID (nur Admin)
+    if admin and not config.get("notion_parent_page_id"):
         response = rumps.Window(
             message="Notion Page URL oder ID eingeben.\n"
                     "(Die Seite unter der die Datenbanken erstellt werden.\n"
                     "Ganze URL oder nur die ID – beides funktioniert.)",
-            title="NXT Storage Scanner – Setup (3/3)",
+            title="NXT Storage Scanner – Admin-Setup (Notion 2/2)",
             default_text="",
             ok="Fertig",
             cancel=False,

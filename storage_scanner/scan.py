@@ -45,6 +45,8 @@ def _build_folder_tree(subfolders, scan_path, incomplete: list | None = None) ->
                 parent = f"{folder.name}/{node['parent_rel_path']}"
             tree.append({
                 "rel_path": rel,
+                # realer Pfad: rel_path lässt Container wie "NXT STUDIOS/" weg
+                "abs_path": str(folder / node["rel_path"]) if node["rel_path"] else str(folder),
                 "depth": node["depth"] + 1,   # +1: Top-Level ist Ebene 1 unter Volume-Root
                 "parent_rel_path": parent,
                 "size_bytes": node["size_bytes"],

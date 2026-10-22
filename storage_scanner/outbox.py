@@ -2,8 +2,9 @@
 
 Pro Datenträger steht höchstens EIN Eintrag in der Queue, der auf seinen
 Report verweist. Ein neuer Scan desselben Datenträgers überschreibt Report und
-Eintrag: hochgeladen wird immer nur der neueste Stand. Kanäle je Eintrag:
-"notion" und "d1". Ein Kanal wird erst nach Erfolg abgehakt; Netzfehler
+Eintrag: hochgeladen wird immer nur der neueste Stand. Einziger Kanal ist
+"d1"; Notion befüllt der Worker aus D1 (cloud/src/notion_sync.js).
+Ein Kanal wird erst nach Erfolg abgehakt; Netzfehler
 beenden den Durchlauf (offline), andere Fehler werden pro Eintrag gemerkt,
 ohne die übrigen zu blockieren.
 """
@@ -22,7 +23,7 @@ from .paths import DATA_DIR
 _log = logging.getLogger("outbox")
 
 QUEUE_PATH = DATA_DIR / "upload_queue.json"
-CHANNELS = ("notion", "d1")
+CHANNELS = ("d1",)
 _lock = threading.RLock()
 _flush_lock = threading.Lock()  # nie zwei Durchläufe gleichzeitig
 
@@ -75,28 +76,18 @@ def _is_network_error(e: Exception) -> bool:
                                   "timed out", "network is unreachable", "temporary failure"))
 
 
-def _send_notion(report: str, user_name: str) -> None:
-    from .notion_sync import run_sync
-    run_sync(report)
-
-
 def _send_d1(report: str, user_name: str) -> None:
     from .d1_client import push_report
     if not push_report(report, user_name=user_name):
         raise RuntimeError("D1-Push ohne 2xx")
 
 
-SENDERS = {"notion": _send_notion, "d1": _send_d1}
+SENDERS = {"d1": _send_d1}
 
 
 def channels_for(config: dict) -> list[str]:
-    """Nur Kanäle, die auf diesem Mac eingerichtet sind."""
-    ch = []
-    if config.get("notion_token"):
-        ch.append("notion")
-    if config.get("d1_ingest_url") and config.get("d1_token"):
-        ch.append("d1")
-    return ch
+    """Nur Kanäle, die auf diesem Mac eingerichtet sind (Notion macht der Worker)."""
+    return ["d1"] if config.get("d1_ingest_url") and config.get("d1_token") else []
 
 
 def flush(path: Path = QUEUE_PATH, senders: dict | None = None) -> dict:

@@ -57,10 +57,10 @@ def test_rescan_during_upload_is_not_lost(tmp_path):
     r = _report(tmp_path)
     outbox.enqueue(r, path=q)
 
-    def notion(report, user):
+    def d1(report, user):
         outbox.enqueue(r, path=q)  # während des Uploads kommt ein neuer Scan rein
 
-    res = outbox.flush(path=q, senders={"notion": notion, "d1": lambda *a: None})
+    res = outbox.flush(path=q, senders={"d1": d1})
     # der neue Scan muss noch komplett ausstehen
     entry = outbox.pending(q)[str(tmp_path / "NXT_001_report.json")]
     assert entry["generation"] == 2 and entry["pending"] == list(outbox.CHANNELS)
@@ -70,10 +70,17 @@ def test_rescan_during_upload_is_not_lost(tmp_path):
 def test_partial_channel_success_only_retries_missing(tmp_path):
     q = tmp_path / "q.json"
     r = _report(tmp_path)
-    outbox.enqueue(r, path=q)
-    _, s = _recorder(fail=lambda ch, rep: httpx.ReadTimeout("t") if ch == "d1" else None)
-    outbox.flush(path=q, senders=s)
-    assert next(iter(outbox.pending(q).values()))["pending"] == ["d1"]
+    outbox.enqueue(r, channels=["a", "b"], path=q)
+    calls = []
+
+    def ok(report, user):
+        calls.append("a")
+
+    def fail(report, user):
+        raise httpx.ReadTimeout("t")
+
+    outbox.flush(path=q, senders={"a": ok, "b": fail})
+    assert next(iter(outbox.pending(q).values()))["pending"] == ["b"]
 
 
 def test_non_network_error_does_not_block_others(tmp_path):
@@ -98,8 +105,8 @@ def test_missing_report_is_dropped(tmp_path):
 
 def test_channels_follow_config():
     assert outbox.channels_for({}) == []
-    assert outbox.channels_for({"notion_token": "x"}) == ["notion"]
-    assert outbox.channels_for({"notion_token": "x", "d1_ingest_url": "u", "d1_token": "t"}) == ["notion", "d1"]
+    assert outbox.channels_for({"notion_token": "x"}) == []   # Notion macht der Worker
+    assert outbox.channels_for({"d1_ingest_url": "u", "d1_token": "t"}) == ["d1"]
 
 
 def test_enqueue_without_channels_is_noop(tmp_path):

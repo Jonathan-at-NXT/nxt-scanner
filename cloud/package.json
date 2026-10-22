@@ -6,9 +6,12 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "schema": "wrangler d1 execute nxt-scanner --file=./schema.sql --remote",
-    "schema:local": "wrangler d1 execute nxt-scanner --file=./schema.sql --local"
+    "schema:local": "wrangler d1 execute nxt-scanner --file=./schema.sql --local",
+    "test": "node --test test/",
+    "migrate": "wrangler d1 execute nxt-scanner --remote --file=./migrations/0002_notion_sync.sql"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
-  }
+  },
+  "type": "module"
 }

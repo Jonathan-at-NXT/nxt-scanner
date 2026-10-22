@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS disks (
     used_bytes INTEGER,
     capacity_bytes INTEGER,
     last_scan TEXT,
-    last_user TEXT
+    last_user TEXT,
+    fs_used_bytes INTEGER        -- echte Belegung laut Dateisystem (Notion "Belegt")
 );
 
 CREATE TABLE IF NOT EXISTS folder_tree (
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS folder_tree (
     size_bytes INTEGER,
     file_count INTEGER,
     mtime TEXT,
+    abs_path TEXT,               -- realer Pfad inkl. ausgeblendeter Container (NXT STUDIOS/)
     UNIQUE(disk_uuid, rel_path)
 );
 CREATE INDEX IF NOT EXISTS idx_tree_disk_depth ON folder_tree(disk_uuid, depth);
@@ -87,3 +89,12 @@ CREATE TABLE IF NOT EXISTS ingest_session (
     host TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_session_project ON ingest_session(project_id);
+
+-- Notion-Spiegel (Worker-Cron): welcher Scan je Platte zuletzt nach Notion ging
+CREATE TABLE IF NOT EXISTS notion_sync_state (
+    disk_uuid TEXT PRIMARY KEY,
+    synced_scan TEXT,
+    hdd_page_id TEXT,
+    synced_at TEXT,
+    last_error TEXT
+);

@@ -5,9 +5,15 @@
  *   Schreibt disks + folder_tree idempotent (delete+insert je disk_uuid) nach D1.
  * GET  /health  — Liveness.
  *
+ * POST /notion-sync — Bearer-Auth. Notion-Spiegel aus D1 anstoßen
+ *   (?dry=1 = nur planen, nichts schreiben; ?disk=<uuid|name> = nur diese Platte).
+ * Cron (wrangler.toml) — alle 15 min Notion-Sync für Platten mit neuem Scan.
+ *
  * Secrets kommen ausschliesslich aus env (wrangler secret put INGEST_TOKEN) —
  * niemals im Repo.
  */
+
+import { runNotionSync } from "./notion_sync.js";
 
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), {
@@ -215,8 +221,31 @@ async function buildBoard(env) {
 }
 
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(
+      runNotionSync(env).then(
+        (r) => console.log("notion-sync", JSON.stringify({ synced: r.disks.length, pending: r.pending, calls: r.calls })),
+        (e) => console.error("notion-sync failed", String(e)),
+      ),
+    );
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (url.pathname === "/notion-sync" && request.method === "POST") {
+      if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+      try {
+        const r = await runNotionSync(env, {
+          dry: url.searchParams.get("dry") === "1",
+          onlyDisk: url.searchParams.get("disk"),
+          maxCalls: Number(url.searchParams.get("max_calls")) || 900,
+        });
+        return json(r);
+      } catch (e) {
+        return json({ error: "notion-sync", detail: String(e) }, 500);
+      }
+    }
 
     if (url.pathname === "/health") {
       return json({ ok: true });
@@ -343,16 +372,18 @@ export default {
       // disks upsert
       stmts.push(
         env.DB.prepare(
-          `INSERT INTO disks(uuid,name,fs_type,is_network,used_bytes,capacity_bytes,last_scan,last_user)
-           VALUES(?,?,?,?,?,?,?,?)
+          `INSERT INTO disks(uuid,name,fs_type,is_network,used_bytes,capacity_bytes,last_scan,last_user,fs_used_bytes)
+           VALUES(?,?,?,?,?,?,?,?,?)
            ON CONFLICT(uuid) DO UPDATE SET
              name=excluded.name, fs_type=excluded.fs_type, is_network=excluded.is_network,
-             used_bytes=excluded.used_bytes, capacity_bytes=excluded.capacity_bytes,
+             used_bytes=excluded.used_bytes,
+             capacity_bytes=COALESCE(excluded.capacity_bytes, disks.capacity_bytes),
+             fs_used_bytes=COALESCE(excluded.fs_used_bytes, disks.fs_used_bytes),
              last_scan=excluded.last_scan, last_user=excluded.last_user`
         ).bind(
           uuid, disk.name ?? null, disk.fs_type ?? null, disk.is_network ?? null,
           disk.used_bytes ?? null, disk.capacity_bytes ?? null,
-          disk.last_scan ?? null, disk.last_user ?? null
+          disk.last_scan ?? null, disk.last_user ?? null, disk.fs_used_bytes ?? null
         )
       );
 
@@ -361,11 +392,11 @@ export default {
       for (const n of tree) {
         stmts.push(
           env.DB.prepare(
-            `INSERT INTO folder_tree(disk_uuid,rel_path,depth,parent_rel_path,size_bytes,file_count,mtime)
-             VALUES(?,?,?,?,?,?,?)`
+            `INSERT INTO folder_tree(disk_uuid,rel_path,depth,parent_rel_path,size_bytes,file_count,mtime,abs_path)
+             VALUES(?,?,?,?,?,?,?,?)`
           ).bind(
             uuid, n.rel_path, n.depth ?? null, n.parent_rel_path ?? null,
-            n.size_bytes ?? null, n.file_count ?? null, n.mtime ?? null
+            n.size_bytes ?? null, n.file_count ?? null, n.mtime ?? null, n.abs_path ?? null
           )
         );
       }

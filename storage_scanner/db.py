@@ -93,9 +93,11 @@ def build_payload(report: dict, user_name: str = "") -> dict:
     tree = _tree_from_report(report)
     name = Path(si.get("scanned_path", "")).name
     used = sum(n["size_bytes"] for n in tree if n.get("depth") == 1)
+    usage = si.get("disk_usage") or {}
     disk_row = {
         "uuid": uuid, "name": name, "fs_type": None, "is_network": None,
-        "used_bytes": used, "capacity_bytes": None,
+        "used_bytes": used, "capacity_bytes": usage.get("total_bytes"),
+        "fs_used_bytes": usage.get("used_bytes"),
         "last_scan": si.get("scan_date"), "last_user": user_name or None,
     }
     return {"disk": disk_row, "folder_tree": tree}
