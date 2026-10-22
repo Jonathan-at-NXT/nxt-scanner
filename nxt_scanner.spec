@@ -31,6 +31,7 @@ a = Analysis(
         'storage_scanner.db',
         'storage_scanner.catalog',
         'storage_scanner.transfer',
+        'storage_scanner.outbox',
         'storage_scanner.d1_client',
         'storage_scanner.ingest',
         'storage_scanner.ingest.camera_map',

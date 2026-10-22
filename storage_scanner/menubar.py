@@ -516,6 +516,13 @@ class StorageScannerApp(rumps.App):
             if self._seconds_since_last_scan(name) >= backoff:
                 self.enqueue(name, silent=True)
 
+    @rumps.timer(120)
+    def upload_queue_check(self, _):
+        """Alle 2 Minuten: wartende Uploads nachholen (z. B. nach Offline-Scans)."""
+        from . import outbox
+        if outbox.pending():
+            threading.Thread(target=outbox.flush_safe, daemon=True).start()
+
     # ── Menü aktualisieren ──────────────────────────────────────────
 
     @rumps.timer(5)
@@ -615,32 +622,40 @@ class StorageScannerApp(rumps.App):
 
     def _do_scan(self, volume_name: str):
         from .scan import run_scan
-        from .notion_sync import run_sync
 
         volume_path = f"/Volumes/{volume_name}"
         report_name = volume_name.replace(" ", "_") + "_report.json"
         report_path = REPORTS_DIR / report_name
 
         try:
+            # Scan + lokale Ablage laufen immer, auch offline
             run_scan(volume_path, str(report_path))
-            run_sync(str(report_path))
 
             from .db import db_ingest_safe
             db_ingest_safe(str(report_path), user_name=self._user_name)
 
-            from .d1_client import push_safe
-            push_safe(str(report_path), user_name=self._user_name)
+            # Uploads (Notion, D1) über die Queue: neuester Scan je Datenträger gewinnt
+            from .notion_sync import load_config
+            from . import outbox
+            config = load_config()
+            outbox.enqueue(str(report_path), user_name=self._user_name,
+                           channels=outbox.channels_for(config))
+            res = outbox.flush_safe() or {"offline": True}
 
             self._scan_times[volume_name] = datetime.now().isoformat()
             self._save_scan_times()
             self._fail_counts.pop(volume_name, None)
 
-            self._log(f"Scan + Sync abgeschlossen: {volume_name}")
-            rumps.notification("NXT Storage Scanner", "Fertig", f"{volume_name} → Notion aktualisiert")
+            if res.get("offline"):
+                self._log(f"Scan abgeschlossen (offline, Upload folgt): {volume_name}")
+                rumps.notification("NXT Storage Scanner", "Fertig (offline)",
+                                   f"{volume_name} gescannt, Upload folgt automatisch")
+            else:
+                self._log(f"Scan + Sync abgeschlossen: {volume_name}")
+                rumps.notification("NXT Storage Scanner", "Fertig", f"{volume_name} → Notion aktualisiert")
 
             # Datei-Katalog (lokal, opt-in) nach der Meldung, da der Hash-Lauf dauern kann
             from .catalog import catalog_safe
-            from .notion_sync import load_config
             catalog_safe(volume_path, load_config())
         except Exception as e:
             self._fail_counts[volume_name] = self._fail_counts.get(volume_name, 0) + 1

@@ -1236,7 +1236,9 @@ def main():
 
     scanned_path = report["scan_info"]["scanned_path"]
 
-    if Path(scanned_path).exists():
+    if report["scan_info"].get("disk_usage"):
+        disk_info = report["scan_info"]["disk_usage"]  # Stand beim Scan (auch für Offline-Sync)
+    elif Path(scanned_path).exists():
         disk_info = get_disk_info(scanned_path)
     else:
         print(f"Hinweis: {scanned_path} nicht gemountet – Speicherplatz-Infos nicht verfügbar.")
@@ -1277,7 +1279,9 @@ def run_sync(report_path: str) -> None:
 
     scanned_path = report["scan_info"]["scanned_path"]
 
-    if Path(scanned_path).exists():
+    if report["scan_info"].get("disk_usage"):
+        disk_info = report["scan_info"]["disk_usage"]  # Stand beim Scan (auch für Offline-Sync)
+    elif Path(scanned_path).exists():
         disk_info = get_disk_info(scanned_path)
     else:
         disk_info = {"total_bytes": 0, "used_bytes": 0, "free_bytes": 0}

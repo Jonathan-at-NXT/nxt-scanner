@@ -29,6 +29,24 @@ def push(payload: dict, url: str, token: str, timeout: float = 60.0) -> bool:
     return 200 <= resp.status_code < 300
 
 
+def push_report(report_path: str, user_name: str = "") -> bool:
+    """Liest Report, baut Payload, pusht nach D1. Netzfehler werden NICHT geschluckt,
+    damit die Upload-Queue den Eintrag behält. Ohne D1-Config: False."""
+    from .db import build_payload
+
+    config = load_config()
+    url = config.get("d1_ingest_url", "")
+    token = config.get("d1_token", "")
+    if not url or not token:
+        return False
+    report = json.loads(Path(report_path).read_text())
+    payload = build_payload(report, user_name=user_name or config.get("user_name", ""))
+    ok = push(payload, url, token)
+    if ok:
+        _log.info("D1-Push ok: %s (%d Knoten)", payload["disk"]["name"], len(payload["folder_tree"]))
+    return ok
+
+
 def push_safe(report_path: str, user_name: str = "") -> bool:
     """Liest Report, baut Payload, pusht nach D1. Schluckt jeden Fehler.
 

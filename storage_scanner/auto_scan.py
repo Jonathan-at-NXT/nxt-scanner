@@ -87,9 +87,8 @@ def seconds_since_last_scan(volume_name: str, scan_times: dict[str, str]) -> flo
 
 
 def scan_and_sync(volume_name: str) -> bool:
-    """Führt Scan und Notion-Sync für ein Volume aus. Gibt True bei Erfolg zurück."""
+    """Scannt ein Volume (auch offline) und stellt die Uploads in die Queue. True bei Erfolg."""
     from .scan import run_scan
-    from .notion_sync import run_sync
 
     volume_path = f"/Volumes/{volume_name}"
     report_name = volume_name.replace(" ", "_") + "_report.json"
@@ -101,20 +100,20 @@ def scan_and_sync(volume_name: str) -> bool:
         run_scan(volume_path, str(report_path))
         log.info(f"Scan abgeschlossen: {volume_name}")
 
-        run_sync(str(report_path))
-        log.info(f"Notion-Sync abgeschlossen: {volume_name}")
-
         from .db import db_ingest_safe
         if db_ingest_safe(str(report_path)):
             log.info(f"DB-Ingest abgeschlossen: {volume_name}")
 
-        from .d1_client import push_safe
-        if push_safe(str(report_path)):
-            log.info(f"D1-Push abgeschlossen: {volume_name}")
+        # Uploads über die Queue (offline-fest, neuester Scan je Datenträger gewinnt)
+        from .notion_sync import load_config
+        from . import outbox
+        config = load_config()
+        outbox.enqueue(str(report_path), channels=outbox.channels_for(config))
+        res = outbox.flush_safe()
+        log.info(f"Upload-Queue: {res}")
 
         # Datei-Katalog: nur lokal und nur wenn in der Config aktiviert
         from .catalog import catalog_safe
-        from .notion_sync import load_config
         catalog_safe(volume_path, load_config())
         return True
     except Exception as e:
@@ -151,6 +150,11 @@ def main():
             log.info(f"Rescan (letzter Scan vor {elapsed / 60:.0f} Min.): {volume_name}")
             if scan_and_sync(volume_name):
                 scan_times[volume_name] = datetime.now().isoformat()
+
+    # Uploads früherer Offline-Scans nachholen
+    from . import outbox
+    if outbox.pending():
+        outbox.flush_safe()
 
     # Alle aktuell gemounteten Volumes als bekannt speichern
     save_known_volumes(current_volumes)

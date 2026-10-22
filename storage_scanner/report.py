@@ -1,6 +1,7 @@
 """JSON-Report generieren und speichern."""
 
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -27,10 +28,20 @@ def generate_report(scanned_path: str, projects: list[dict], unassigned: list[di
             "valid_folders": len(projects),
             "unassigned_folders": len(unassigned),
             "volume_uuid": get_volume_uuid(scanned_path),
+            "disk_usage": _disk_usage(scanned_path),
         },
         "projects": projects,
         "unassigned": unassigned,
     }
+
+
+def _disk_usage(path: str) -> dict | None:
+    """Kapazität zum Scan-Zeitpunkt, damit ein späterer (Offline-)Sync korrekte Werte hat."""
+    try:
+        u = shutil.disk_usage(path)
+        return {"total_bytes": u.total, "used_bytes": u.used, "free_bytes": u.free}
+    except OSError:
+        return None
 
 
 def save_report(report: dict, output_path: Path) -> None:
