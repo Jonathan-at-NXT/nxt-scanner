@@ -346,6 +346,32 @@ export default {
     // ── Rollout-Tracking abgeschlossen (offline genommen 2026-08). ──
     // buildRollout()/ROLLOUT_HTML bleiben im Code erhalten, um es bei Bedarf
     // (neue Datenträger) mit einem Route-Eintrag wieder zu aktivieren.
+    // ── Platten-Check (Bearer INGEST_TOKEN): letzter Zustand je Datenträger ──
+    if (url.pathname === "/ingest/health" && request.method === "POST") {
+      if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+      let h;
+      try { h = await request.json(); } catch { return json({ error: "invalid json" }, 400); }
+      if (!h?.disk_uuid || !["ok", "warnung", "defekt", "unbekannt"].includes(h.verdict)) return json({ error: "invalid health" }, 400);
+      const sm = h.smart || {}, fs = h.fs || {}, rd = h.read || {};
+      const n = (v) => (Number.isFinite(v) ? Math.round(v) : null);
+      const t = (v, max = 500) => (v == null ? null : String(v).slice(0, max));
+      await env.DB.prepare(
+        `INSERT INTO disk_health(disk_uuid, checked_at, host, verdict, smart_status, smart_reason, model, wear_pct, spare_pct,
+           media_errors, power_on_hours, temperature, fs_status, fs_reason, read_status, read_errors, read_reason)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(disk_uuid) DO UPDATE SET checked_at=excluded.checked_at, host=excluded.host, verdict=excluded.verdict,
+           smart_status=excluded.smart_status, smart_reason=excluded.smart_reason, model=COALESCE(excluded.model, disk_health.model),
+           wear_pct=excluded.wear_pct, spare_pct=excluded.spare_pct, media_errors=excluded.media_errors,
+           power_on_hours=excluded.power_on_hours, temperature=excluded.temperature,
+           fs_status=COALESCE(excluded.fs_status, disk_health.fs_status), fs_reason=COALESCE(excluded.fs_reason, disk_health.fs_reason),
+           read_status=COALESCE(excluded.read_status, disk_health.read_status), read_errors=COALESCE(excluded.read_errors, disk_health.read_errors),
+           read_reason=COALESCE(excluded.read_reason, disk_health.read_reason)`
+      ).bind(t(h.disk_uuid, 100), t(h.checked_at, 40), t(h.host, 100), h.verdict, t(sm.status, 20), t(sm.reason), t(sm.model, 100),
+             n(sm.wear_pct), n(sm.spare_pct), n(sm.media_errors), n(sm.power_on_hours), n(sm.temperature),
+             t(fs.status, 20), t(fs.reason), t(rd.status, 20), n(rd.errors), t(rd.reason)).run();
+      return json({ ok: true });
+    }
+
     if (url.pathname === "/rollout" || url.pathname === "/rollout.json") {
       return new Response("Rollout-Tracking abgeschlossen – Seite offline.", {
         status: 410,

@@ -88,7 +88,13 @@ def _send_notion(report: str, user_name: str) -> None:
     run_sync(report)
 
 
-SENDERS = {"d1": _send_d1, "notion": _send_notion}
+def _send_health(path: str, user_name: str) -> None:
+    from .d1_client import push_health
+    if not push_health(path):
+        raise RuntimeError("Health-Push ohne 2xx")
+
+
+SENDERS = {"d1": _send_d1, "notion": _send_notion, "health": _send_health}
 
 
 def channels_for(config: dict) -> list[str]:

@@ -72,3 +72,15 @@ def push_safe(report_path: str, user_name: str = "") -> bool:
     except Exception as e:  # noqa: BLE001 - non-blocking
         _log.error("D1-Push Fehler fuer %s: %s", report_path, e)
         return False
+
+
+def push_health(health_path: str) -> bool:
+    """Platten-Check-Ergebnis an <url>/ingest/health. Netzfehler werden nicht geschluckt (Queue)."""
+    config = load_config()
+    url, token = config.get("d1_ingest_url", ""), config.get("d1_token", "")
+    if not url or not token:
+        return False
+    data = json.loads(Path(health_path).read_text())
+    resp = httpx.post(url.rstrip("/") + "/ingest/health", json=data,
+                      headers={"Authorization": f"Bearer {token}"}, timeout=60)
+    return 200 <= resp.status_code < 300

@@ -47,14 +47,14 @@ async function audit(env, who, action, target, detail) {
 
 async function loadState(env) {
   const q = (sql) => env.DB.prepare(sql).all().then((r) => r.results || []);
-  const [projects, disks, diskMeta, rules, states, overrides] = await Promise.all([
+  const [projects, disks, diskMeta, rules, states, overrides, health] = await Promise.all([
     q(`SELECT disk_uuid, rel_path, name, date, project_name, norm_name, type, status, size_bytes, file_count, mtime,
               cluster_id, soll_name FROM projects`),
     q("SELECT uuid, name, used_bytes, fs_used_bytes, capacity_bytes, last_scan, last_user FROM disks"),
     q("SELECT * FROM disk_meta"), q("SELECT * FROM project_rule"), q("SELECT * FROM finding_state"),
-    q("SELECT * FROM folder_override"),
+    q("SELECT * FROM folder_override"), q("SELECT * FROM disk_health"),
   ]);
-  const a = analyze({ projects, disks, diskMeta, rules, states });
+  const a = analyze({ projects, disks, diskMeta, rules, states, health });
   // Ordner ohne gültigen Namen (Kandidaten für Soll-Namen), mit Platte
   const diskName = new Map(disks.map((d) => [d.uuid, d.name]));
   const ov = new Map(overrides.map((o) => [`${o.disk_uuid}|${o.rel_path}`, o]));

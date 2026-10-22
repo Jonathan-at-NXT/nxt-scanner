@@ -15,7 +15,8 @@ export const SICHERUNG = {
 export const DEFAULT_SICHERUNG = "doppelt";
 export const TIERS = ["SSD", "HDD", "NAS", "CLOUD"];
 export const PRIORITY = { MISSING_BACKUP: "kritisch", TIER_MISSING: "kritisch", SIZE_MISMATCH: "warnung",
-  INCOMPLETE_BACKUP: "warnung", EXCESS_COPIES: "info", UMBENENNEN: "info", DUPLICATE_DISK_NAME: "info" };
+  INCOMPLETE_BACKUP: "warnung", EXCESS_COPIES: "info", UMBENENNEN: "info", DUPLICATE_DISK_NAME: "info",
+  DISK_DEFECT: "kritisch", DISK_WARN: "warnung" };
 
 const gb = (b) => Math.round(((b || 0) / 1e9) * 100) / 100;
 // Anzeige im Befund-Text: deutsch, ab 100 GB ohne Nachkommastellen
@@ -30,8 +31,9 @@ export function guessTier(name) {
 }
 
 /** Datenträger mit Stufe, Halter, Füllstand und Namensdoppel-Hinweis. */
-export function buildDisks(disks, metaRows, projects) {
+export function buildDisks(disks, metaRows, projects, healthRows = []) {
   const meta = new Map(metaRows.map((m) => [m.disk_uuid, m]));
+  const healthBy = new Map(healthRows.map((h) => [h.disk_uuid, h]));
   const byName = new Map();
   for (const d of disks) if (!d.uuid.startsWith("name:")) byName.set(d.name, (byName.get(d.name) || 0) + 1);
   const projCount = new Map(), validBytes = new Map();
@@ -63,6 +65,7 @@ export function buildDisks(disks, metaRows, projects) {
       free_gb: cap && used != null ? Math.max(0, gb(cap - used)) : null,
       fill: cap && used != null ? Math.min(1, used / cap) : null,
       bad_projects: 0, only_here: 0, only_here_gb: 0,   // werden nach der Projekt-Auswertung gefüllt
+      health: healthBy.get(d.uuid) || null,
       last_scan: d.last_scan, last_user: d.last_user,
       projects: projCount.get(d.uuid) || 0, project_gb: gb(validBytes.get(d.uuid) || 0),
       duplicate_name: dup, separate_disk: !!m.separate_disk,
@@ -73,8 +76,8 @@ export function buildDisks(disks, metaRows, projects) {
 }
 
 /** Projekte je Cluster inkl. Regel, Kopien je Typ, Befunde. */
-export function analyze({ projects, disks, diskMeta = [], rules = [], states = [] }) {
-  const diskList = buildDisks(disks, diskMeta, projects);
+export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [] }) {
+  const diskList = buildDisks(disks, diskMeta, projects, health);
   const disk = new Map(diskList.map((d) => [d.uuid, d]));
   const ruleBy = new Map(rules.map((r) => [r.rule_key, r]));
   const stateBy = new Map(states.map((s) => [s.finding_key, s]));
@@ -220,6 +223,18 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
     for (const [u, g] of onlyHere) { const d = disk.get(u); if (d) { d.only_here++; d.only_here_gb = Math.round((d.only_here_gb + g) * 100) / 100; } }
   }
 
+  // Platten-Check: defekte/auffällige Platten; dringend, wenn dort einzige Kopien liegen
+  for (const d of diskList) {
+    const h = d.health;
+    if (!h || d.fallback || !["defekt", "warnung"].includes(h.verdict)) continue;
+    const reasons = [h.smart_reason, h.fs_status === "defekt" ? h.fs_reason : null, h.read_errors ? h.read_reason : null]
+      .filter((x) => x && x !== "unauffällig").join("; ");
+    add({ key: `${h.verdict === "defekt" ? "DISK_DEFECT" : "DISK_WARN"}|${d.uuid}`, type: h.verdict === "defekt" ? "DISK_DEFECT" : "DISK_WARN",
+          cluster: null, project: null, disks: [d.uuid],
+          details: `${d.name}: ${reasons || h.verdict}` +
+            (d.only_here ? ` · ${d.only_here} Projekte (${fg(d.only_here_gb)}) liegen nur hier → sofort sichern` : " · alles darauf hat eine 2. Kopie") });
+  }
+
   // Flotte: gleiche Namen bei verschiedenen Platten
   const seen = new Map();
   for (const d of diskList) if (!d.fallback) { if (!seen.has(d.name)) seen.set(d.name, []); seen.get(d.name).push(d); }
@@ -258,6 +273,9 @@ function overview(projects, disks, findings) {
     copies: buckets, copies_tb: Object.fromEntries(Object.entries(bucketGb).map(([k, v]) => [k, Math.round(v / 10) / 100])),
     unsecured_tb: Math.round(unsecured.reduce((s, p) => s + p.missing_gb, 0) / 10) / 100,
     unsecured_full: projects.filter((p) => p.level === "einfach").length,
+    disks_defect: realDisks.filter((d) => d.health?.verdict === "defekt").length,
+    disks_warn: realDisks.filter((d) => d.health?.verdict === "warnung").length,
+    disks_checked: realDisks.filter((d) => d.health).length,
     unsecured_partial: projects.filter((p) => p.level === "teilweise").length,
     savings_tb: Math.round(open.filter((f) => f.type === "EXCESS_COPIES").reduce((s, f) => s + (f.savings_gb || 0), 0) / 10) / 100,
     findings: byPrio, tier_tb: Object.fromEntries(Object.entries(tierGb).map(([k, v]) => [k, Math.round(v / 10) / 100])),

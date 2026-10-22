@@ -655,6 +655,8 @@ class StorageScannerApp(rumps.App):
                 rumps.notification("NXT Storage Scanner", "Fertig", f"{volume_name} → Notion aktualisiert")
 
             # Datei-Katalog (lokal, opt-in) nach der Meldung, da der Hash-Lauf dauern kann
+            from .health import health_safe
+            health_safe(volume_path, load_config())  # Platten-Check (opt-in)
             from .catalog import catalog_safe
             catalog_safe(volume_path, load_config())
         except Exception as e:

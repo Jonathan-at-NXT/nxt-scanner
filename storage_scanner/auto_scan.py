@@ -113,6 +113,8 @@ def scan_and_sync(volume_name: str) -> bool:
         log.info(f"Upload-Queue: {res}")
 
         # Datei-Katalog: nur lokal und nur wenn in der Config aktiviert
+        from .health import health_safe
+        health_safe(volume_path, load_config())  # Platten-Check (opt-in)
         from .catalog import catalog_safe
         catalog_safe(volume_path, load_config())
         return True

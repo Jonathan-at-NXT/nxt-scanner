@@ -14,7 +14,11 @@
     return new Date(iso).toLocaleDateString("de-DE");
   };
   const TYPE_LABEL = { MISSING_BACKUP: "Nur 1× gesichert", TIER_MISSING: "Pflicht-Stufe fehlt", SIZE_MISMATCH: "Größe weicht ab",
-    INCOMPLETE_BACKUP: "Kopie unvollständig", EXCESS_COPIES: "Zu viele Kopien", UMBENENNEN: "Umbenennen", DUPLICATE_DISK_NAME: "Name doppelt" };
+    INCOMPLETE_BACKUP: "Kopie unvollständig", EXCESS_COPIES: "Zu viele Kopien", UMBENENNEN: "Umbenennen", DUPLICATE_DISK_NAME: "Name doppelt",
+    DISK_DEFECT: "Platte defekt", DISK_WARN: "Platte auffällig" };
+  const HEALTH = { ok: ["ok", "OK"], warnung: ["warnung", "Auffällig"], defekt: ["kritisch", "Defekt"], unbekannt: ["", "Unbekannt"] };
+  const healthBadge = (h) => !h ? '<span class="faint" title="noch nicht geprüft">–</span>'
+    : `<span class="row" style="gap:6px;flex-wrap:nowrap" title="${esc([h.smart_reason, h.fs_reason, h.read_reason].filter(Boolean).join(" · "))}"><span class="dot ${HEALTH[h.verdict][0]}"></span>${HEALTH[h.verdict][1]}</span>`;
   const PRIO_LABEL = { kritisch: "Kritisch", warnung: "Warnung", info: "Info" };
 
   let S = null;                  // Zustand vom Server
@@ -105,7 +109,7 @@
         <div class="panel kpi"><div class="label">Einsparpotenzial</div><div class="value num">${fmtTb(o.savings_tb)}</div>
           <div class="sub">durch überzählige Kopien (mehr als die Regel verlangt)</div></div>
         <a class="panel kpi" href="#/datentraeger" style="text-decoration:none"><div class="label">Datenträger</div><div class="value num">${fmtN(o.disks)}</div>
-          <div class="sub">${fmtTb(o.used_tb)} belegt · Kapazität bei ${o.capacity_known} bekannt</div></a>
+          <div class="sub">${fmtTb(o.used_tb)} belegt${o.disks_checked ? ` · ${o.disks_defect ? `<span style="color:var(--crit)">${o.disks_defect} defekt</span> · ` : ""}${o.disks_warn ? `${o.disks_warn} auffällig · ` : ""}${o.disks_checked} geprüft` : " · Zustand noch ungeprüft"}</div></a>
       </div>
       <div class="grid two section">
         <div class="panel"><h3>Sicherungsgrad</h3>
@@ -166,18 +170,20 @@
       const list = S.disks.filter((d) => !d.fallback && (!s || [d.name, d.holder, d.location].some((x) => String(x || "").toLowerCase().includes(s))))
         .filter((d) => ui.disk.tier === "alle" || (ui.disk.tier === "ohne" ? !d.tier : d.tier === ui.disk.tier))
 ;
-      const sorted = sortBy(list, "disk", { name: (d) => d.name, tier: (d) => d.tier, holder: (d) => d.holder, fill: (d) => d.fill,
+      const sorted = sortBy(list, "disk", { name: (d) => d.name, health: (d) => ({ defekt: 3, warnung: 2, ok: 1, unbekannt: 0 }[d.health?.verdict] ?? null),
+        tier: (d) => d.tier, holder: (d) => d.holder, fill: (d) => d.fill,
         free: (d) => d.free_gb, projects: (d) => d.projects, bad: (d) => d.bad_projects, only: (d) => d.only_here_gb, scan: (d) => d.last_scan });
       const tiers = ["alle", ...S.meta.tiers, "ohne"];
       return `
       <div class="head"><div><h1>Datenträger</h1><p>Wer welche Platte hat, wie voll sie ist und was darauf liegt. Klick zum Bearbeiten von Stufe, Halter und Standort.</p></div></div>
       <div class="toolbar">${tiers.map((t) => `<button class="chip ${ui.disk.tier === t ? "on" : ""}" data-tier="${t}">${t === "alle" ? "Alle" : t === "ohne" ? "Ohne Stufe" : t}</button>`).join("")}</div>
-      <table class="table"><thead><tr>${th("disk", "name", "Name")}${th("disk", "tier", "Stufe")}${th("disk", "holder", "Bei")}${th("disk", "fill", "Füllgrad")}${th("disk", "free", "Frei", "r")}${th("disk", "bad", "Probleme", "r")}${th("disk", "only", "Nur hier", "r hide-m")}${th("disk", "scan", "Letzter Scan", "hide-m")}</tr></thead><tbody>
+      <table class="table"><thead><tr>${th("disk", "name", "Name")}${th("disk", "health", "Zustand")}${th("disk", "tier", "Stufe")}${th("disk", "holder", "Bei")}${th("disk", "fill", "Füllgrad")}${th("disk", "free", "Frei", "r")}${th("disk", "bad", "Probleme", "r")}${th("disk", "only", "Nur hier", "r hide-m")}${th("disk", "scan", "Letzter Scan", "hide-m")}</tr></thead><tbody>
       ${sorted.map((d) => {
         const cls = d.fill == null ? "" : d.fill > 0.95 ? "full" : d.fill > 0.85 ? "high" : "";
         return `<tr class="click" data-disk="${esc(d.uuid)}">
           <td><div class="name">${esc(d.name)} ${d.duplicate_name ? `<span class="tc" title="Mehrere Einträge mit diesem Namen" style="color:var(--warn)">${d.stale ? "älterer Eintrag · nicht gezählt" : "Name doppelt"}</span>` : ""}</div>
             <div class="sub">${esc(d.location || "")}</div></td>
+          <td>${healthBadge(d.health)}</td>
           <td>${tierBadge(d.tier)}${d.tier_source === "guess" ? ' <span class="faint" title="aus dem Namen geschätzt">geschätzt</span>' : ""}</td>
           <td>${esc(d.holder || "–")}</td>
           <td>${d.fill != null ? `<div class="fill ${cls}"><span style="width:${d.fill * 100}%"></span></div><div class="sub num">${Math.round(d.fill * 100)} % · ${fmtGb(d.used_gb)} / ${fmtGb(d.capacity_gb)}</div>`
@@ -296,6 +302,13 @@
       <h2>${esc(d.name)}</h2>
       <div class="sub mono">${esc(d.uuid)}</div>
       <div class="sub">Zuletzt gescannt ${rel(d.last_scan)} von ${esc(d.last_user || "?")}</div>
+      <div class="block"><h3>Zustand</h3>${d.health ? `
+        <div class="row">${healthBadge(d.health)} <span class="sub">geprüft ${rel(d.health.checked_at)}${d.health.host ? " auf " + esc(d.health.host) : ""}</span></div>
+        <div class="copy"><div>SMART <span class="sub">${esc(d.health.model || "")}</span></div><div class="r">${esc(d.health.smart_status || "–")}</div>
+          <div class="path">${esc(d.health.smart_reason || "")}${d.health.wear_pct != null ? ` · Verschleiß ${d.health.wear_pct} %` : ""}${d.health.power_on_hours != null ? ` · ${fmtN(d.health.power_on_hours)} Betriebsstunden` : ""}${d.health.temperature != null ? ` · ${d.health.temperature} °C` : ""}</div></div>
+        ${d.health.fs_status ? `<div class="copy"><div>Dateisystem</div><div class="r">${esc(d.health.fs_status)}</div><div class="path">${esc(d.health.fs_reason || "")}</div></div>` : ""}
+        ${d.health.read_status ? `<div class="copy"><div>Lesetest</div><div class="r">${esc(d.health.read_status)}</div><div class="path">${esc(d.health.read_reason || "")}</div></div>` : ""}`
+        : '<div class="muted">Noch nicht geprüft. Der Check läuft beim nächsten Scan auf dem Sicherungs-Mac.</div>'}</div>
       <div class="block"><h3>Angaben</h3>
         <form class="form" id="disk-form">
           <label class="field">Speicherstufe<select name="tier">${d.tier ? "" : '<option value="" selected disabled>– bitte wählen –</option>'}${S.meta.tiers.map((t) => `<option ${d.tier === t ? "selected" : ""}>${t}</option>`).join("")}</select>
