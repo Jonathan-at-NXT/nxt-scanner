@@ -1,59 +1,40 @@
-"""Chunked Copy zu zwei Zielen, resumable und atomar.
+"""Kopie einer Karte auf zwei Ziele über das sichere Transfer-Modul.
 
-Kopiert nach `dst.tmp` und benennt erst nach vollständiger Übertragung um
-(atomarer rename) — nie eine halbe Datei am Zielnamen. Existiert bereits eine
-verifizierte Kopie, wird sie übersprungen (resumable). Quelle wird nur gelesen.
+Delegiert an storage_scanner.transfer.safe_copy: eine Quelle wird einmal
+gelesen und parallel auf beide Ziele geschrieben, jedes Ziel landet erst nach
+F_FULLFSYNC + vollständigem Hash-Abgleich unter seinem Namen. Vorhandene
+identische Kopien werden übersprungen (resumable), fremde Dateien am Ziel nie
+überschrieben. Quelle wird nur gelesen.
 """
 
-import os
-import shutil
 from pathlib import Path
 
+from ..transfer import safe_copy
 from .verify import verify_copy
 
-_CHUNK = 8 * 1024 * 1024  # 8 MiB
 
-
-def copy_file(src: Path, dst: Path, chunk: int = _CHUNK, progress=None) -> bool:
-    """Kopiert src->dst chunked+atomar. Gibt True bei tatsächlicher Kopie,
-    False wenn übersprungen (bereits verifiziert vorhanden)."""
-    src, dst = Path(src), Path(dst)
-    if verify_copy(src, dst):
-        return False  # resumable: identische Kopie existiert schon
-
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_name(dst.name + ".tmp")
-    with src.open("rb") as fin, tmp.open("wb") as fout:
-        while True:
-            buf = fin.read(chunk)
-            if not buf:
-                break
-            fout.write(buf)
-            if progress:
-                progress(len(buf))
-    shutil.copystat(src, tmp)
-    os.replace(tmp, dst)  # atomar
-    return True
+def copy_file(src: Path, dst: Path, progress=None) -> bool:
+    """Kopiert src->dst sicher. True bei tatsächlicher Kopie, False wenn
+    übersprungen (identische Kopie vorhanden)."""
+    return bool(safe_copy(Path(src), [Path(dst)], progress=progress)["copied"])
 
 
 def copy_to_targets(pairs_a: list[tuple[Path, Path]],
                     pairs_b: list[tuple[Path, Path]],
                     progress=None) -> dict:
-    """Kopiert dieselben Quellen nach Ziel A und Ziel B und verifiziert beide.
+    """Kopiert dieselben Quellen nach Ziel A und Ziel B (eine Lesung pro Quelle)
+    und prüft danach beide Ziele.
 
     pairs_a/pairs_b: Listen (src, dst) — gleiche Quellen, verschiedene Zielbäume.
     """
+    targets: dict[Path, list[Path]] = {}
+    for src, dst in list(pairs_a) + list(pairs_b):
+        targets.setdefault(Path(src), []).append(Path(dst))
+
     copied = 0
-    verified_a = True
-    verified_b = True
-    for src, dst in pairs_a:
-        if copy_file(src, dst, progress=progress):
-            copied += 1
-        if not verify_copy(src, dst):
-            verified_a = False
-    for src, dst in pairs_b:
-        if copy_file(src, dst, progress=progress):
-            copied += 1
-        if not verify_copy(src, dst):
-            verified_b = False
+    for src, dsts in targets.items():
+        copied += len(safe_copy(src, dsts, progress=progress)["copied"])
+
+    verified_a = all(verify_copy(s, d) for s, d in pairs_a)
+    verified_b = all(verify_copy(s, d) for s, d in pairs_b)
     return {"copied": copied, "verified_a": verified_a, "verified_b": verified_b}
