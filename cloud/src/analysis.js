@@ -60,7 +60,9 @@ export function buildDisks(disks, metaRows, projects) {
       holder: m.holder || d.last_user || null, holder_source: m.holder ? "manual" : "scan",
       location: m.location || null, note: m.note || null,
       capacity_gb: cap ? gb(cap) : null, used_gb: used != null ? gb(used) : null,
+      free_gb: cap && used != null ? Math.max(0, gb(cap - used)) : null,
       fill: cap && used != null ? Math.min(1, used / cap) : null,
+      bad_projects: 0, only_here: 0, only_here_gb: 0,   // werden nach der Projekt-Auswertung gefüllt
       last_scan: d.last_scan, last_user: d.last_user,
       projects: projCount.get(d.uuid) || 0, project_gb: gb(validBytes.get(d.uuid) || 0),
       duplicate_name: dup, separate_disk: !!m.separate_disk,
@@ -203,6 +205,19 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       rule_note: rule?.note || null, rule_by: rule?.updated_by || null,
       ok: copiesOverall >= min && requireTiers.every((t) => tiersPresent.has(t)),
     });
+  }
+
+  // Je Platte: Projekte mit Problemen (Regel nicht erfüllt) und Projekte, deren einziger
+  // Ordner eines Typs hier liegt (fällt die Platte aus, ist das weg)
+  for (const p of out) {
+    const onDisks = new Set(p.types.flatMap((t) => t.copies.map((c) => c.disk_uuid)));
+    if (!p.ok) for (const u of onDisks) { const d = disk.get(u); if (d) d.bad_projects++; }
+    const onlyHere = new Map();
+    for (const t of p.types) if (t.disks === 1) {
+      const u = t.copies[0].disk_uuid;
+      onlyHere.set(u, (onlyHere.get(u) || 0) + t.size_gb);
+    }
+    for (const [u, g] of onlyHere) { const d = disk.get(u); if (d) { d.only_here++; d.only_here_gb = Math.round((d.only_here_gb + g) * 100) / 100; } }
   }
 
   // Flotte: gleiche Namen bei verschiedenen Platten

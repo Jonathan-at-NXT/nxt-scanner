@@ -133,6 +133,9 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); }
   padding: 8px 10px; border-bottom: 1px solid var(--line); position: sticky; top: var(--topbar); background: var(--bg); z-index: 1; }
 .table td { padding: 11px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .table tr.click { cursor: pointer; }
+.table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.table th.sortable:hover { color: var(--text-2); }
+.table th.sortable.on { color: var(--text); }
 .table tr.click:hover td { background: var(--panel); }
 .table td.r, .table th.r { text-align: right; }
 .name { font-weight: 500; }

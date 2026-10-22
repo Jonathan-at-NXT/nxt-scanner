@@ -18,6 +18,22 @@
   const PRIO_LABEL = { kritisch: "Kritisch", warnung: "Warnung", info: "Info" };
 
   let S = null;                  // Zustand vom Server
+  const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+                  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+  const sortState = store.get("nxt-sort", { disk: { key: "name", dir: 1 }, proj: { key: "date", dir: -1 } });
+  const cmp = (a, b) => (a == null && b == null ? 0 : a == null ? 1 : b == null ? -1
+    : typeof a === "string" ? a.localeCompare(b, "de", { numeric: true }) : a - b);
+  function sortBy(list, table, getters) {
+    const { key, dir } = sortState[table];
+    const g = getters[key] || getters[Object.keys(getters)[0]];
+    return [...list].sort((x, y) => { const a = g(x), b = g(y);
+      if (a == null || b == null) return cmp(a, b);           // leere Werte immer ans Ende
+      return cmp(a, b) * dir; });
+  }
+  const th = (table, key, label, cls = "") => {
+    const st = sortState[table], on = st.key === key;
+    return `<th class="sortable ${cls} ${on ? "on" : ""}" data-sort="${table}:${key}" aria-sort="${on ? (st.dir > 0 ? "ascending" : "descending") : "none"}">${label}${on ? (st.dir > 0 ? " ↑" : " ↓") : ""}</th>`;
+  };
   let ui = { proj: { filter: "alle", limit: 150 }, disk: { tier: "alle" }, find: { prio: "kritisch", status: "offen", type: "" }, assign: { limit: 100 } };
 
   // ── Daten ──────────────────────────────────────
@@ -132,11 +148,14 @@
       return `
       <div class="head"><div><h1>Projekte</h1><p>Alle Ordnertypen eines Projekts zusammengefasst, über alle Datenträger hinweg. Klick öffnet Details und Sicherungsregel.</p></div></div>
       <div class="toolbar">${chip("alle", "Alle")}${chip("einfach", "Nur 1×")}${chip("teilweise", "Teilweise")}${chip("2", "2×")}${chip("3", "3+×")}${chip("verletzt", "Regel nicht erfüllt")}${chip("regel", "Eigene Regel")}</div>
-      ${list.length ? `<table class="table"><thead><tr><th></th><th>Projekt</th><th>Ordnertypen &amp; Kopien</th><th class="r">Größe</th><th class="hide-m">Sicherung</th></tr></thead><tbody>
-      ${list.slice(0, ui.proj.limit).map((p) => `<tr class="click" data-proj="${esc(p.id)}">
+      ${list.length ? `<table class="table"><thead><tr><th></th>${th("proj", "date", "Projekt")}${th("proj", "copies", "Ordnertypen &amp; Kopien")}${th("proj", "size", "Größe", "r")}${th("proj", "missing", "Fehlt", "r hide-m")}${th("proj", "sicherung", "Sicherung", "hide-m")}</tr></thead><tbody>
+      ${sortBy(list, "proj", { date: (p) => p.date, name: (p) => p.name, copies: (p) => p.copies * 10 + p.copies_max, size: (p) => p.size_gb,
+          missing: (p) => p.missing_gb || null, sicherung: (p) => S.meta.sicherung[p.sicherung].min })
+        .slice(0, ui.proj.limit).map((p) => `<tr class="click" data-proj="${esc(p.id)}">
         <td style="width:20px">${statusDot(p)}</td>
         <td><div class="name">${esc(p.name)}</div><div class="sub">${esc(p.date)} · ${esc(p.disks.join(", "))}</div></td>
         <td>${typeChips(p)}</td><td class="r num">${fmtGb(p.size_gb)}</td>
+        <td class="r num hide-m">${p.missing_gb ? `<span style="color:var(--crit)">${fmtGb(p.missing_gb)}</span>` : '<span class="faint">–</span>'}</td>
         <td class="hide-m"><span class="muted">${esc(S.meta.sicherung[p.sicherung].label)}</span>${p.require_tiers.map((t) => " " + tierBadge(t)).join("")}</td></tr>`).join("")}
       </tbody></table>${list.length > ui.proj.limit ? `<div class="more"><button class="btn ghost" data-more="proj">${fmtN(list.length - ui.proj.limit)} weitere anzeigen</button></div>` : ""}`
       : `<div class="empty">Keine Projekte gefunden.</div>`}`;
@@ -146,22 +165,27 @@
       const s = q();
       const list = S.disks.filter((d) => !d.fallback && (!s || [d.name, d.holder, d.location].some((x) => String(x || "").toLowerCase().includes(s))))
         .filter((d) => ui.disk.tier === "alle" || (ui.disk.tier === "ohne" ? !d.tier : d.tier === ui.disk.tier))
-        .sort((a, b) => a.name.localeCompare(b.name, "de", { numeric: true }));
+;
+      const sorted = sortBy(list, "disk", { name: (d) => d.name, tier: (d) => d.tier, holder: (d) => d.holder, fill: (d) => d.fill,
+        free: (d) => d.free_gb, projects: (d) => d.projects, bad: (d) => d.bad_projects, only: (d) => d.only_here_gb, scan: (d) => d.last_scan });
       const tiers = ["alle", ...S.meta.tiers, "ohne"];
       return `
       <div class="head"><div><h1>Datenträger</h1><p>Wer welche Platte hat, wie voll sie ist und was darauf liegt. Klick zum Bearbeiten von Stufe, Halter und Standort.</p></div></div>
       <div class="toolbar">${tiers.map((t) => `<button class="chip ${ui.disk.tier === t ? "on" : ""}" data-tier="${t}">${t === "alle" ? "Alle" : t === "ohne" ? "Ohne Stufe" : t}</button>`).join("")}</div>
-      <table class="table"><thead><tr><th>Name</th><th>Stufe</th><th>Bei</th><th>Belegung</th><th class="r">Projekte</th><th class="hide-m">Letzter Scan</th></tr></thead><tbody>
-      ${list.map((d) => {
+      <table class="table"><thead><tr>${th("disk", "name", "Name")}${th("disk", "tier", "Stufe")}${th("disk", "holder", "Bei")}${th("disk", "fill", "Füllgrad")}${th("disk", "free", "Frei", "r")}${th("disk", "bad", "Probleme", "r")}${th("disk", "only", "Nur hier", "r hide-m")}${th("disk", "scan", "Letzter Scan", "hide-m")}</tr></thead><tbody>
+      ${sorted.map((d) => {
         const cls = d.fill == null ? "" : d.fill > 0.95 ? "full" : d.fill > 0.85 ? "high" : "";
         return `<tr class="click" data-disk="${esc(d.uuid)}">
           <td><div class="name">${esc(d.name)} ${d.duplicate_name ? `<span class="tc" title="Mehrere Einträge mit diesem Namen" style="color:var(--warn)">${d.stale ? "älterer Eintrag · nicht gezählt" : "Name doppelt"}</span>` : ""}</div>
             <div class="sub">${esc(d.location || "")}</div></td>
           <td>${tierBadge(d.tier)}${d.tier_source === "guess" ? ' <span class="faint" title="aus dem Namen geschätzt">geschätzt</span>' : ""}</td>
           <td>${esc(d.holder || "–")}</td>
-          <td>${d.fill != null ? `<div class="fill ${cls}"><span style="width:${d.fill * 100}%"></span></div><div class="sub num">${fmtGb(d.used_gb)} / ${fmtGb(d.capacity_gb)}</div>`
+          <td>${d.fill != null ? `<div class="fill ${cls}"><span style="width:${d.fill * 100}%"></span></div><div class="sub num">${Math.round(d.fill * 100)} % · ${fmtGb(d.used_gb)} / ${fmtGb(d.capacity_gb)}</div>`
                 : `<div class="sub num">${fmtGb(d.used_gb)} belegt</div><div class="sub">Kapazität kommt mit dem nächsten Scan</div>`}</td>
-          <td class="r num">${fmtN(d.projects)}</td><td class="hide-m muted">${rel(d.last_scan)}</td></tr>`;
+          <td class="r num">${d.free_gb != null ? fmtGb(d.free_gb) : '<span class="faint">–</span>'}</td>
+          <td class="r num" title="${fmtN(d.projects)} Projekte auf der Platte">${d.bad_projects ? `<span style="color:var(--warn)">${fmtN(d.bad_projects)}</span>` : '<span class="faint">0</span>'}<span class="faint"> / ${fmtN(d.projects)}</span></td>
+          <td class="r num hide-m" title="Projektteile, deren einzige Kopie auf dieser Platte liegt">${d.only_here ? `<span style="color:var(--crit)">${fmtGb(d.only_here_gb)}</span><div class="sub">${fmtN(d.only_here)} Projekte</div>` : '<span class="faint">–</span>'}</td>
+          <td class="hide-m muted">${rel(d.last_scan)}</td></tr>`;
       }).join("")}</tbody></table>`;
     },
 
@@ -326,8 +350,15 @@
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); $("#q").focus(); } });
 
   document.addEventListener("click", async (e) => {
-    const t = e.target.closest("[data-proj],[data-disk],[data-pf],[data-tier],[data-prio],[data-more],[data-fstate],[data-save-assign],[data-clear-assign]");
+    const t = e.target.closest("[data-sort],[data-proj],[data-disk],[data-pf],[data-tier],[data-prio],[data-more],[data-fstate],[data-save-assign],[data-clear-assign]");
     if (!t) return;
+    if (t.dataset.sort) {
+      const [table, key] = t.dataset.sort.split(":");
+      const st = sortState[table];
+      // erster Klick: sinnvolle Richtung (Text/Datum aufsteigend bzw. Datum neueste zuerst, Zahlen größte zuerst)
+      if (st.key === key) st.dir *= -1; else { st.key = key; st.dir = ["name", "tier", "holder"].includes(key) ? 1 : -1; }
+      store.set("nxt-sort", sortState); return render();
+    }
     if (t.dataset.proj !== undefined) { e.preventDefault(); projectDrawer(t.dataset.proj); return; }
     if (t.dataset.disk !== undefined) { e.preventDefault(); diskDrawer(t.dataset.disk); return; }
     if (t.dataset.pf) { ui.proj.filter = t.dataset.pf; ui.proj.limit = 150; history.replaceState(null, "", "#/projekte"); return render(); }
