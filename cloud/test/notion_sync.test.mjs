@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validateFolder, buildDiskView, changedProps, syncDisk, runNotionSync, makeNotion } from "../src/notion_sync.js";
+import { validateFolder, buildDiskView, changedProps, syncDisk, runNotionSync, makeNotion, relFromAbsPath } from "../src/notion_sync.js";
 
 const here = new URL(".", import.meta.url);
 
@@ -162,4 +162,44 @@ test("runNotionSync: nur Platten mit neuem Scan, Stand wird gemerkt", async () =
   assert.equal(state.get("U1"), disk.last_scan);
   const r2 = await runNotionSync(env, { notion });
   assert.equal(r2.disks.length, 0);
+});
+
+test("syncDisk: gleichnamige Unterordner verschiedener Projekte bleiben getrennt", async () => {
+  const two = [
+    { rel_path: "2024-01-01_A", depth: 1, size_bytes: 3e9, file_count: 3 },
+    { rel_path: "2024-01-01_A/VIDEO", depth: 2, parent_rel_path: "2024-01-01_A", size_bytes: 1e9, file_count: 1 },
+    { rel_path: "2024-02-02_B", depth: 1, size_bytes: 5e9, file_count: 5 },
+    { rel_path: "2024-02-02_B/VIDEO", depth: 2, parent_rel_path: "2024-02-02_B", size_bytes: 2e9, file_count: 2 },
+  ];
+  const notion = fakeNotion();
+  await syncDisk(notion, ids, disk, two);
+  const videos = notion.dbs.SP.filter((p) => p.properties.Name.title[0].plain_text === "VIDEO");
+  assert.equal(videos.length, 2);
+  assert.deepEqual(videos.map((p) => p.properties.Dateien.number).sort(), [1, 2]);
+  const again = await syncDisk(notion, ids, disk, two);
+  assert.equal(again.created + again.updated + again.archived, 0);
+});
+
+test("relFromAbsPath entfernt Volume und Container", () => {
+  assert.equal(relFromAbsPath("/Volumes/TOWER 7/NXT STUDIOS/2025_X/VIDEO"), "2025_X/VIDEO");
+  assert.equal(relFromAbsPath("/Volumes/TOWER 7/2025_X"), "2025_X");
+  assert.equal(relFromAbsPath("/Volumes/TOWER 7/OLDER"), "OLDER");
+  assert.equal(relFromAbsPath(""), "");
+});
+
+test("syncDisk: Zuordnung über Pfad, auch wenn Projekt-Relation in beide Richtungen zeigt", async () => {
+  const notion = fakeNotion();
+  const mk = (name, path, extra = {}) => notion.dbs.SP.push(toPage(`e-${name}-${path.length}`, {
+    "Name": { title: [{ text: { content: name } }] }, "Absoluter Pfad": { rich_text: [{ text: { content: path } }] },
+    "HDD": { relation: [{ id: "HDDPAGE" }] }, "Dateien": { number: 0 }, ...extra }));
+  notion.dbs.HDD.push(toPage("HDDPAGE", { "Name": { title: [{ text: { content: "TOWER 7" } }] } }));
+  mk("2024-07-23_AZQIRA", "/Volumes/TOWER 7/NXT STUDIOS/2024-07-23_AZQIRA", { "Projekt": { relation: [{ id: "x" }] } });
+  mk("VIDEO", "/Volumes/TOWER 7/NXT STUDIOS/2024-07-23_AZQIRA/VIDEO");
+  const tree = [
+    { rel_path: "2024-07-23_AZQIRA", depth: 1, size_bytes: 9e9, file_count: 9 },
+    { rel_path: "2024-07-23_AZQIRA/VIDEO", depth: 2, parent_rel_path: "2024-07-23_AZQIRA", size_bytes: 6e9, file_count: 6 },
+  ];
+  const r = await syncDisk(notion, ids, disk, tree);
+  assert.equal(r.created, 0);
+  assert.equal(r.archived, 0);
 });

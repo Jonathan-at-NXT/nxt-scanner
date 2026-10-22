@@ -121,10 +121,10 @@ export function buildDiskView(disk, nodes) {
         } else {
           cprops["Status"] = { select: { name: "Unassigned" } };
         }
-        children.push({ name: cname, props: cprops, manualProps: dynamic(c), fallbackPath: fallbackPath(c) });
+        children.push({ name: cname, relPath: c.rel_path, props: cprops, manualProps: dynamic(c), fallbackPath: fallbackPath(c) });
       }
     }
-    folders.push({ name, valid: !!v, props, manualProps: dynamic(n), children, fallbackPath: fallbackPath(n) });
+    folders.push({ name, relPath: n.rel_path, valid: !!v, props, manualProps: dynamic(n), children, fallbackPath: fallbackPath(n) });
   }
 
   const hdd = {
@@ -219,6 +219,18 @@ export function makeNotion(token, { fetchImpl = fetch, gapMs = 340, sleep } = {}
   return { call, queryAll, stats };
 }
 
+// Container, die der Scanner auf oberster Ebene "durchsichtig" macht (scan.py)
+const CONTAINERS = new Set(["NXT STUDIOS", "OLDER"]);
+
+/** "/Volumes/TOWER 7/NXT STUDIOS/X/VIDEO" -> "X/VIDEO" (wie folder_tree.rel_path) */
+export function relFromAbsPath(abs) {
+  const m = /^\/Volumes\/[^/]+\/(.+)$/.exec(abs || "");
+  if (!m) return "";
+  const parts = m[1].split("/");
+  if (parts.length > 1 && CONTAINERS.has(parts[0].toUpperCase())) parts.shift();
+  return parts.join("/");
+}
+
 const titleOf = (page) => (page.properties?.Name?.title || []).map((t) => t.plain_text).join("");
 
 // ── Eine Platte spiegeln ──────────────────────────────────────────────
@@ -249,18 +261,28 @@ export async function syncDisk(notion, ids, disk, nodes, { dry = false } = {}) {
   }
   res.hdd_page_id = hddId;
 
-  // Bestehende Speicherungen dieser Platte
-  const existing = new Map();
+  // Bestehende Speicherungen dieser Platte, eindeutig über den Ordnerpfad
+  // ("Absoluter Pfad" ohne /Volumes/<Platte>/ und ohne Container wie NXT STUDIOS/),
+  // weil gleichnamige Unterordner ("VIDEO") in mehreren Projekten vorkommen und die
+  // Projekt-Relation in Notion in beide Richtungen zeigt. Seiten ohne Pfad: per Name.
+  const byPath = new Map();
+  const byTitle = new Map();
   if (!dry || hddId !== "dry-hdd") {
     for (const p of await notion.queryAll(ids.speicherungen, { property: "HDD", relation: { contains: hddId } })) {
-      existing.set(titleOf(p), p); // wie Python: bei Doppeltitel gewinnt der letzte
+      const rel = relFromAbsPath(plain(p.properties?.["Absoluter Pfad"]) || "");
+      if (rel) byPath.set(rel, p);
+      else if (!byTitle.has(titleOf(p))) byTitle.set(titleOf(p), p);
     }
   }
-  const seen = new Set();
+  const used = new Set();
 
-  async function upsert(name, props, manualProps, extra, fallback) {
-    seen.add(name);
-    const page = existing.get(name);
+  async function upsert(name, relPath, props, manualProps, extra, fallback) {
+    let page = byPath.get(relPath);
+    if (!page || used.has(page.id)) {
+      const t = byTitle.get(name);
+      page = t && !used.has(t.id) ? t : undefined;
+    }
+    if (page) used.add(page.id);
     const isManual = page?.properties?.Status?.select?.name === "Manuell";
     const desired = isManual ? manualProps : { ...props, ...extra };
     if (!page && !desired["Absoluter Pfad"] && fallback) {
@@ -283,15 +305,17 @@ export async function syncDisk(notion, ids, disk, nodes, { dry = false } = {}) {
 
   const hddRel = { "HDD": { relation: [{ id: hddId }] } };
   for (const f of view.folders) {
-    const parentId = await upsert(f.name, f.props, f.manualProps, hddRel, f.fallbackPath);
+    const parentId = await upsert(f.name, f.relPath, f.props, f.manualProps, hddRel, f.fallbackPath);
     for (const c of f.children) {
-      await upsert(c.name, c.props, c.manualProps,
+      await upsert(c.name, c.relPath, c.props, c.manualProps,
         { ...hddRel, "Projekt": { relation: [{ id: parentId }] } }, c.fallbackPath);
     }
   }
 
-  for (const [name, page] of existing) {
-    if (!seen.has(name)) {
+  for (const page of [...byPath.values(), ...byTitle.values()]) {
+    if (!used.has(page.id)) {
+      used.add(page.id);
+      const name = titleOf(page);
       op("archive", name);
       if (!dry) await notion.call("PATCH", `pages/${page.id}`, { archived: true });
       res.archived++;

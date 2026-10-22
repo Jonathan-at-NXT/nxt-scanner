@@ -21,3 +21,8 @@ __pycache__/
 .idea/
 .vscode/
 *.swp
+
+# Cloudflare lokale Secrets
+.dev.vars
+cloud/.dev.vars
+cloud/.wrangler/
