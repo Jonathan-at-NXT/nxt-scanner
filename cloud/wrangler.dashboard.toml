@@ -9,8 +9,8 @@ workers_dev = true
 [vars]
 # Cloudflare Access (Zero Trust): Team-Domain und Application-AUD nach der Einrichtung eintragen.
 # Leer = Dashboard bleibt komplett gesperrt.
-ACCESS_TEAM_DOMAIN = ""
-ACCESS_AUD = ""
+ACCESS_TEAM_DOMAIN = "royal-cell-6005.cloudflareaccess.com"
+ACCESS_AUD = "402fd8f959b5bda1ce69af0ceedb67228f9f848788fa8d85bbe340e05192f3a6"
 ALLOWED_EMAIL_DOMAINS = "nxtstudios.de"
 
 [[d1_databases]]
