@@ -13,8 +13,9 @@ HDD_DB_ID = "31b8ae70-295b-811b-b0c9-daa586563078"
 SPEICHERUNGEN_DB_ID = "31b8ae70-295b-814e-88ed-f7caaabfaab6"
 
 # Notion-Spiegel aus D1 (ersetzt den Notion-Sync im Scanner)
-[triggers]
-crons = ["*/15 * * * *"]
+# Cron erst nach Probelauf über alle Platten aktivieren:
+# [triggers]
+# crons = ["*/15 * * * *"]
 
 [[d1_databases]]
 binding = "DB"
