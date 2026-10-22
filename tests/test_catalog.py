@@ -158,3 +158,15 @@ def test_missing_mount_is_rejected_without_db_entry(tmp_path):
     with pytest.raises(FileNotFoundError):
         catalog.inventory(str(tmp_path / "gone"), conn, vol=_vol())
     assert conn.execute("SELECT COUNT(*) FROM volume").fetchone()[0] == 0
+
+
+def test_hash_pass_prefix_only_hashes_project(tmp_path):
+    _write(tmp_path, "P_1/a.mp4", b"a")
+    _write(tmp_path, "PX1/b.mp4", b"b")   # '_' darf nicht als Wildcard greifen
+    _write(tmp_path, "Q/c.mp4", b"c")
+    conn = catalog.connect(":memory:")
+    catalog.inventory(str(tmp_path), conn, vol=_vol())
+    r = catalog.hash_pass(str(tmp_path), conn, uuid="U1", prefix="P_1")
+    assert r["hashed"] == 1
+    hashed = {x[0] for x in conn.execute("SELECT rel_path FROM file WHERE fingerprint IS NOT NULL")}
+    assert hashed == {"P_1/a.mp4"}

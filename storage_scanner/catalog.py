@@ -310,7 +310,7 @@ def inventory(mount: str, conn: sqlite3.Connection, vol: dict | None = None,
 # ── Fingerprints (liest Inhalte, langsam, resumable) ──────────────
 
 def hash_pass(mount: str, conn: sqlite3.Connection, uuid: str | None = None,
-              budget_s: float | None = None, host: str = "") -> dict:
+              budget_s: float | None = None, host: str = "", prefix: str = "") -> dict:
     """Fingerprintet alle noch ungehashten Dateien des Volumes, größte zuerst.
     Bricht nach budget_s Sekunden sauber ab; der nächste Lauf macht weiter."""
     from .ingest.verify import fingerprint
@@ -320,10 +320,15 @@ def hash_pass(mount: str, conn: sqlite3.Connection, uuid: str | None = None,
         raise FileNotFoundError(f"Nicht gemountet/kein Ordner: {mount}")
     uuid = uuid or volume_info(str(mount), serials={})["uuid"]
     started, t0 = _now(), time.monotonic()
-    todo = conn.execute(
-        """SELECT rel_path,size,mtime FROM file
-           WHERE volume_uuid=? AND present=1 AND fingerprint IS NULL ORDER BY size DESC""",
-        (uuid,)).fetchall()
+    q = """SELECT rel_path,size,mtime FROM file
+           WHERE volume_uuid=? AND present=1 AND fingerprint IS NULL"""
+    args = [uuid]
+    if prefix.strip("/"):
+        pre = prefix.strip("/")
+        esc = pre.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        q += " AND (rel_path=? OR rel_path LIKE ? ESCAPE '\\')"
+        args += [pre, esc + "/%"]
+    todo = conn.execute(q + " ORDER BY size DESC", args).fetchall()
     hashed = errors = 0
     done_bytes = 0
     timed_out = False
@@ -352,7 +357,7 @@ def hash_pass(mount: str, conn: sqlite3.Connection, uuid: str | None = None,
     remaining = len(todo) - hashed - errors if timed_out else 0
     finished = _now()
     with conn:
-        if not timed_out:
+        if not timed_out and not prefix:
             conn.execute("UPDATE volume SET last_hash_pass=? WHERE uuid=?", (finished, uuid))
         conn.execute(
             """INSERT INTO run(volume_uuid,kind,started_at,finished_at,host,files,bytes,added,changed,
@@ -472,6 +477,7 @@ def main(argv=None):
     p = sub.add_parser("hash", help="Fingerprints nachziehen (liest Dateien)")
     p.add_argument("mount")
     p.add_argument("--minutes", type=float, help="Zeitbudget, danach sauber abbrechen")
+    p.add_argument("--prefix", default="", help="nur Dateien unter diesem Ordner (relativ zum Volume)")
     p = sub.add_parser("diff", help="Referenz gegen Kopie vergleichen")
     p.add_argument("ref_volume"); p.add_argument("ref_prefix")
     p.add_argument("copy_volume"); p.add_argument("copy_prefix")
@@ -488,7 +494,7 @@ def main(argv=None):
               + ("" if r["complete"] else "  [UNVOLLSTÄNDIG]"))
     elif args.cmd == "hash":
         budget = args.minutes * 60 if args.minutes else None
-        r = hash_pass(args.mount, conn, budget_s=budget)
+        r = hash_pass(args.mount, conn, budget_s=budget, prefix=args.prefix)
         print(f"gehasht {r['hashed']} ({_fmt(r['bytes'])}), Fehler {r['errors']}, "
               f"offen {r['remaining']}" + ("" if r["complete"] else "  [Budget erreicht]"))
     elif args.cmd == "diff":
