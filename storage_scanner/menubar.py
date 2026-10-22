@@ -125,10 +125,6 @@ class StorageScannerApp(rumps.App):
             self.name_item,
             self.d1_item,
             None,
-            self.new_project_item,
-            self.active_project_item,
-            self.ingest_item,
-            None,
             self.status_item,
             self.queue_item,
             self.volumes_menu,
@@ -141,6 +137,8 @@ class StorageScannerApp(rumps.App):
         ]
         if self._admin_mode:
             menu_items.insert(1, self.notion_item)
+            # Karten-Ingest (Phase A): erst nur für Admins, bis im Alltag getestet
+            menu_items[3:3] = [None, self.new_project_item, self.active_project_item, self.ingest_item]
             menu_items.append(self.analysis_item)
             menu_items.append(self.fullfilment_item)
         menu_items.extend([
