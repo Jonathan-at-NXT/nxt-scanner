@@ -1,0 +1,339 @@
+"use strict";
+// NXT Speicher – Client. Alle Daten werden escaped (Ordnernamen kommen von Scannern).
+(() => {
+  const $ = (s, el = document) => el.querySelector(s);
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmtGb = (g) => (g == null ? "–" : g >= 1000 ? (g / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " TB"
+    : g.toLocaleString("de-DE", { maximumFractionDigits: g < 10 ? 1 : 0 }) + " GB");
+  const fmtTb = (t) => (t ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " TB";
+  const fmtN = (n) => (n ?? 0).toLocaleString("de-DE");
+  const rel = (iso) => {
+    if (!iso) return "nie";
+    const d = (Date.now() - Date.parse(iso)) / 86400000;
+    if (d < 1) return "heute"; if (d < 2) return "gestern"; if (d < 60) return `vor ${Math.floor(d)} Tagen`;
+    return new Date(iso).toLocaleDateString("de-DE");
+  };
+  const TYPE_LABEL = { MISSING_BACKUP: "Nur 1× gesichert", TIER_MISSING: "Pflicht-Stufe fehlt", SIZE_MISMATCH: "Größe weicht ab",
+    INCOMPLETE_BACKUP: "Kopie unvollständig", EXCESS_COPIES: "Zu viele Kopien", UMBENENNEN: "Umbenennen", DUPLICATE_DISK_NAME: "Name doppelt" };
+  const PRIO_LABEL = { kritisch: "Kritisch", warnung: "Warnung", info: "Info" };
+
+  let S = null;                  // Zustand vom Server
+  let ui = { proj: { filter: "alle", limit: 150 }, disk: { tier: "alle" }, find: { prio: "kritisch", status: "offen", type: "" }, assign: { limit: 100 } };
+
+  // ── Daten ──────────────────────────────────────
+  async function load() {
+    const r = await fetch("/api/state", { headers: { accept: "application/json" } });
+    if (!r.ok) throw new Error(await r.text());
+    S = await r.json();
+    S.projById = new Map(S.projects.map((p) => [p.id, p]));
+    S.diskById = new Map(S.disks.map((d) => [d.uuid, d]));
+    S.findByCluster = new Map();
+    for (const f of S.findings) if (f.cluster) { if (!S.findByCluster.has(f.cluster)) S.findByCluster.set(f.cluster, []); S.findByCluster.get(f.cluster).push(f); }
+    $("#me").textContent = S.me;
+    $("#stand").textContent = "Letzter Scan " + rel(S.meta.last_scan);
+    const crit = S.overview.findings.kritisch;
+    const b = $("#badge-befunde"); b.hidden = !crit; b.textContent = crit > 999 ? "999+" : crit;
+  }
+  async function post(path, body) {
+    const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Fehler");
+    return j;
+  }
+  function toast(msg, bad = false) {
+    const t = $("#toast"); t.textContent = msg; t.className = "toast show" + (bad ? " bad" : "");
+    clearTimeout(toast.t); toast.t = setTimeout(() => (t.className = "toast"), 2600);
+  }
+
+  // ── Bausteine ──────────────────────────────────
+  const tierBadge = (t) => `<span class="tier ${t ? esc(t) : "none"}">${t ? esc(t) : "?"}</span>`;
+  const copyClass = (n) => "c-" + Math.min(n, 3);
+  const typeChips = (p) => `<div class="types">${p.types.map((t) =>
+    `<span class="tc ${copyClass(t.disks)}" title="${esc(t.copies.map((c) => c.disk).join(", "))}">${esc(t.type)} <b>${t.disks}×</b></span>`).join("")}</div>`;
+  const statusDot = (p) => {
+    if (!p.ok) return `<span class="dot kritisch" title="Regel nicht erfüllt"></span>`;
+    if ((S.findByCluster.get(p.id) || []).some((f) => f.status === "offen" && f.priority === "warnung")) return `<span class="dot warnung" title="Warnung"></span>`;
+    return `<span class="dot ok" title="Regel erfüllt"></span>`;
+  };
+  const q = () => $("#q").value.trim().toLowerCase();
+  const matchProject = (p, s) => !s || [p.name, p.date, ...p.aliases, ...p.disks].some((x) => String(x || "").toLowerCase().includes(s));
+
+  // ── Seiten ─────────────────────────────────────
+  const pages = {
+    uebersicht() {
+      const o = S.overview;
+      const tot = Object.values(o.copies).reduce((a, b) => a + b, 0) || 1;
+      const seg = (k, cls) => `<span class="${cls}" style="width:${(o.copies[k] / tot) * 100}%"></span>`;
+      const tiers = Object.entries(o.tier_tb).sort((a, b) => b[1] - a[1]);
+      const tierMax = Math.max(1, ...tiers.map((t) => t[1]));
+      return `
+      <div class="head"><div><h1>Übersicht</h1><p>Wie gut ist alles gesichert, was fehlt, und wo liegt was.</p></div></div>
+      <div class="grid kpis">
+        <div class="panel kpi ${o.ok === o.projects ? "ok" : ""}"><div class="label">Projekte nach Regel gesichert</div>
+          <div class="value num">${fmtN(o.ok)}<span class="faint" style="font-size:22px"> / ${fmtN(o.projects)}</span></div>
+          <div class="sub">${Math.round((o.ok / Math.max(1, o.projects)) * 100)} % erfüllen ihre Sicherungsregel</div></div>
+        <a class="panel kpi crit" href="#/projekte?f=verletzt" style="text-decoration:none"><div class="label">Nicht ausreichend gesichert</div>
+          <div class="value num">${fmtTb(o.unsecured_tb)}</div><div class="sub">${fmtN(o.projects - o.ok)} Projekte · Liste ansehen →</div></a>
+        <a class="panel kpi" href="#/befunde" style="text-decoration:none"><div class="label">Offene Befunde</div>
+          <div class="value num"><span style="color:var(--crit)">${fmtN(o.findings.kritisch)}</span> <span class="faint" style="font-size:22px">kritisch</span></div>
+          <div class="sub">${fmtN(o.findings.warnung)} Warnungen · ${fmtN(o.findings.info)} Infos</div></a>
+        <div class="panel kpi"><div class="label">Einsparpotenzial</div><div class="value num">${fmtTb(o.savings_tb)}</div>
+          <div class="sub">durch überzählige Kopien (mehr als die Regel verlangt)</div></div>
+        <a class="panel kpi" href="#/datentraeger" style="text-decoration:none"><div class="label">Datenträger</div><div class="value num">${fmtN(o.disks)}</div>
+          <div class="sub">${fmtTb(o.used_tb)} belegt · Kapazität bei ${o.capacity_known} bekannt</div></a>
+      </div>
+      <div class="grid two section">
+        <div class="panel"><h3>Sicherungsgrad</h3>
+          <div class="stack">${seg("0", "c0")}${seg("1", "c1")}${seg("2", "c2")}${seg("3+", "c3")}</div>
+          <div class="legend">
+            <span><i class="c1"></i>1× · ${fmtN(o.copies["1"])} Projekte · ${fmtTb(o.copies_tb["1"])}</span>
+            <span><i class="c2"></i>2× · ${fmtN(o.copies["2"])} · ${fmtTb(o.copies_tb["2"])}</span>
+            <span><i class="c3"></i>3+× · ${fmtN(o.copies["3+"])} · ${fmtTb(o.copies_tb["3+"])}</span>
+          </div>
+          <div class="section"><h3 style="color:var(--text-2);margin-bottom:10px">Als Nächstes sichern</h3>
+            ${o.next.length ? `<table class="table"><tbody>${o.next.map((p) => `
+              <tr class="click" data-proj="${esc(p.id)}"><td><div class="name">${esc(p.name)}</div><div class="sub">${esc(p.disks.join(", "))}</div></td>
+              <td class="r num">${fmtGb(p.size_gb)}</td><td class="r"><span class="tc c-${Math.min(p.copies, 3)}"><b>${p.copies}×</b> / ${p.min}×</span></td></tr>`).join("")}
+              </tbody></table>` : `<div class="empty">Alles nach Regel gesichert.</div>`}
+          </div>
+        </div>
+        <div class="panel"><h3>Belegung nach Speicherstufe</h3>
+          ${tiers.map(([t, tb]) => `<div style="margin-bottom:12px"><div class="row" style="justify-content:space-between">
+            <span>${tierBadge(t === "unbekannt" ? null : t)} <span class="muted">${t === "unbekannt" ? "ohne Stufe" : ""}</span></span>
+            <span class="num">${fmtTb(tb)}</span></div>
+            <div class="fill" style="width:100%;margin-top:6px"><span style="width:${(tb / tierMax) * 100}%"></span></div></div>`).join("")}
+          <p class="hint">Stufen setzt ihr unter Datenträger. Ohne Angabe wird sie aus dem Namen geschätzt (TOWER/HUB → HDD, NXT ### → SSD).</p>
+        </div>
+      </div>`;
+    },
+
+    projekte(params) {
+      if (params.get("f")) ui.proj.filter = params.get("f");
+      const s = q();
+      const filters = { alle: () => true, verletzt: (p) => !p.ok, "1": (p) => p.copies <= 1, "2": (p) => p.copies === 2, "3": (p) => p.copies >= 3,
+        regel: (p) => p.sicherung !== "doppelt" || p.require_tiers.length };
+      const base = S.projects.filter((p) => matchProject(p, s));
+      const list = base.filter(filters[ui.proj.filter] || filters.alle);
+      const count = (k) => base.filter(filters[k]).length;
+      const chip = (k, label) => `<button class="chip ${ui.proj.filter === k ? "on" : ""}" data-pf="${k}">${label}<span class="n">${fmtN(count(k))}</span></button>`;
+      return `
+      <div class="head"><div><h1>Projekte</h1><p>Alle Ordnertypen eines Projekts zusammengefasst, über alle Datenträger hinweg. Klick öffnet Details und Sicherungsregel.</p></div></div>
+      <div class="toolbar">${chip("alle", "Alle")}${chip("verletzt", "Regel nicht erfüllt")}${chip("1", "1×")}${chip("2", "2×")}${chip("3", "3+×")}${chip("regel", "Eigene Regel")}</div>
+      ${list.length ? `<table class="table"><thead><tr><th></th><th>Projekt</th><th>Ordnertypen &amp; Kopien</th><th class="r">Größe</th><th class="hide-m">Sicherung</th></tr></thead><tbody>
+      ${list.slice(0, ui.proj.limit).map((p) => `<tr class="click" data-proj="${esc(p.id)}">
+        <td style="width:20px">${statusDot(p)}</td>
+        <td><div class="name">${esc(p.name)}</div><div class="sub">${esc(p.date)} · ${esc(p.disks.join(", "))}</div></td>
+        <td>${typeChips(p)}</td><td class="r num">${fmtGb(p.size_gb)}</td>
+        <td class="hide-m"><span class="muted">${esc(S.meta.sicherung[p.sicherung].label)}</span>${p.require_tiers.map((t) => " " + tierBadge(t)).join("")}</td></tr>`).join("")}
+      </tbody></table>${list.length > ui.proj.limit ? `<div class="more"><button class="btn ghost" data-more="proj">${fmtN(list.length - ui.proj.limit)} weitere anzeigen</button></div>` : ""}`
+      : `<div class="empty">Keine Projekte gefunden.</div>`}`;
+    },
+
+    datentraeger() {
+      const s = q();
+      const list = S.disks.filter((d) => !d.fallback && (!s || [d.name, d.holder, d.location].some((x) => String(x || "").toLowerCase().includes(s))))
+        .filter((d) => ui.disk.tier === "alle" || (ui.disk.tier === "ohne" ? !d.tier : d.tier === ui.disk.tier))
+        .sort((a, b) => a.name.localeCompare(b.name, "de", { numeric: true }));
+      const tiers = ["alle", ...S.meta.tiers, "ohne"];
+      return `
+      <div class="head"><div><h1>Datenträger</h1><p>Wer welche Platte hat, wie voll sie ist und was darauf liegt. Klick zum Bearbeiten von Stufe, Halter und Standort.</p></div></div>
+      <div class="toolbar">${tiers.map((t) => `<button class="chip ${ui.disk.tier === t ? "on" : ""}" data-tier="${t}">${t === "alle" ? "Alle" : t === "ohne" ? "Ohne Stufe" : t}</button>`).join("")}</div>
+      <table class="table"><thead><tr><th>Name</th><th>Stufe</th><th>Bei</th><th>Belegung</th><th class="r">Projekte</th><th class="hide-m">Letzter Scan</th></tr></thead><tbody>
+      ${list.map((d) => {
+        const cls = d.fill == null ? "" : d.fill > 0.95 ? "full" : d.fill > 0.85 ? "high" : "";
+        return `<tr class="click" data-disk="${esc(d.uuid)}">
+          <td><div class="name">${esc(d.name)} ${d.duplicate_name ? `<span class="tc" title="Mehrere Einträge mit diesem Namen" style="color:var(--warn)">${d.stale ? "älterer Eintrag · nicht gezählt" : "Name doppelt"}</span>` : ""}</div>
+            <div class="sub">${esc(d.location || "")}</div></td>
+          <td>${tierBadge(d.tier)}${d.tier_source === "guess" ? ' <span class="faint" title="aus dem Namen geschätzt">geschätzt</span>' : ""}</td>
+          <td>${esc(d.holder || "–")}</td>
+          <td>${d.fill != null ? `<div class="fill ${cls}"><span style="width:${d.fill * 100}%"></span></div><div class="sub num">${fmtGb(d.used_gb)} / ${fmtGb(d.capacity_gb)}</div>`
+                : `<div class="sub num">${fmtGb(d.used_gb)} belegt</div><div class="sub">Kapazität kommt mit dem nächsten Scan</div>`}</td>
+          <td class="r num">${fmtN(d.projects)}</td><td class="hide-m muted">${rel(d.last_scan)}</td></tr>`;
+      }).join("")}</tbody></table>`;
+    },
+
+    befunde() {
+      const s = q();
+      const all = S.findings.filter((f) => !s || [f.project, f.details, f.folder_type].some((x) => String(x || "").toLowerCase().includes(s)));
+      const byStatus = all.filter((f) => ui.find.status === "alle" || f.status === ui.find.status);
+      const list = byStatus.filter((f) => f.priority === ui.find.prio && (!ui.find.type || f.type === ui.find.type));
+      const n = (p) => byStatus.filter((f) => f.priority === p).length;
+      const types = [...new Set(byStatus.filter((f) => f.priority === ui.find.prio).map((f) => f.type))];
+      return `
+      <div class="head"><div><h1>Befunde</h1><p>Die Auswertung, live aus den Scans. „Umgesetzt“ und „Ignoriert“ bleiben gespeichert, bis sich die Lage ändert.</p></div></div>
+      <div class="toolbar">
+        ${["kritisch", "warnung", "info"].map((p) => `<button class="chip ${ui.find.prio === p ? "on" : ""}" data-prio="${p}"><span class="dot ${p}"></span> ${PRIO_LABEL[p]}<span class="n">${fmtN(n(p))}</span></button>`).join("")}
+        <span style="flex:1"></span>
+        <select id="ftype" style="width:auto"><option value="">Alle Arten</option>${types.map((t) => `<option value="${t}" ${ui.find.type === t ? "selected" : ""}>${TYPE_LABEL[t]}</option>`).join("")}</select>
+        <select id="fstatus" style="width:auto">${["offen", "umgesetzt", "ignoriert", "alle"].map((st) => `<option value="${st}" ${ui.find.status === st ? "selected" : ""}>${st[0].toUpperCase() + st.slice(1)}</option>`).join("")}</select>
+      </div>
+      <div class="panel">${list.length ? list.slice(0, 400).map(findingRow).join("") : `<div class="empty">Keine Befunde in dieser Auswahl.</div>`}
+      ${list.length > 400 ? `<p class="hint">${fmtN(list.length - 400)} weitere – Suche oder Filter eingrenzen.</p>` : ""}</div>`;
+    },
+
+    zuordnen() {
+      const s = q();
+      const list = S.unassigned.filter((u) => !s || [u.name, u.disk, u.soll_name].some((x) => String(x || "").toLowerCase().includes(s)));
+      const names = [...new Set(S.projects.flatMap((p) => p.types.flatMap((t) => t.copies.map((c) => c.soll_name || c.name))))].sort();
+      return `
+      <div class="head"><div><h1>Zuordnen</h1><p>Ordner, deren Name nicht dem Schema <span class="mono">JJJJ-MM-TT_Projekt_TYP</span> folgt. Mit einem Soll-Namen zählen sie zum richtigen Projekt und erscheinen als Umbenennen-Hinweis. Am Ordner selbst wird nichts geändert.</p></div></div>
+      <datalist id="namelist">${names.slice(0, 3000).map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
+      <div class="panel">${list.length ? list.slice(0, ui.assign.limit).map((u, i) => `
+        <div class="assign"><div><div class="name">${esc(u.name)}</div><div class="sub">${esc(u.disk)} · ${fmtGb(u.size_gb)} · ${fmtN(u.files)} Dateien</div></div>
+          <input type="text" list="namelist" placeholder="Soll-Name, z. B. 2026-08-06_MACHERFESTIVAL_FOOTAGE" value="${esc(u.soll_name || "")}" data-assign="${i}">
+          <div class="row"><button class="btn small" data-save-assign="${i}">Speichern</button>${u.soll_name ? `<button class="btn small ghost" data-clear-assign="${i}">Entfernen</button>` : ""}</div>
+        </div>`).join("") : `<div class="empty">Alle Ordner sind zugeordnet.</div>`}
+        ${list.length > ui.assign.limit ? `<div class="more"><button class="btn ghost" data-more="assign">${fmtN(list.length - ui.assign.limit)} weitere</button></div>` : ""}</div>`;
+    },
+
+    async protokoll() {
+      const r = await fetch("/api/audit"); const { rows } = await r.json();
+      const label = { regel: "Sicherungsregel", datentraeger: "Datenträger", soll_name: "Soll-Name", befund: "Befund" };
+      return `<div class="head"><div><h1>Protokoll</h1><p>Wer hat wann was geändert. Die letzten 300 Einträge.</p></div></div>
+      <div class="panel">${rows.length ? `<table class="table"><thead><tr><th>Wann</th><th>Wer</th><th>Was</th><th>Details</th></tr></thead><tbody>
+        ${rows.map((r) => `<tr><td class="num">${esc(new Date(r.at).toLocaleString("de-DE"))}</td><td>${esc(r.who)}</td><td>${esc(label[r.action] || r.action)}</td>
+        <td><div class="mono" style="word-break:break-all">${esc(r.target)}</div><div class="sub">${esc(r.detail)}</div></td></tr>`).join("")}</tbody></table>`
+        : `<div class="empty">Noch keine Änderungen.</div>`}</div>`;
+    },
+  };
+
+  function findingRow(f) {
+    const done = f.status !== "offen";
+    return `<div class="finding ${done ? "done" : ""}"><span class="dot ${f.priority}" style="margin-top:7px"></span>
+      <div><div class="t">${esc(TYPE_LABEL[f.type] || f.type)}${f.folder_type ? " · " + esc(f.folder_type) : ""}${done ? " · " + esc(f.status) + (f.state_by ? " von " + esc(f.state_by) : "") : ""}</div>
+        ${f.project ? `<a class="p" href="#" data-proj="${esc(f.cluster)}">${esc(f.project)}</a>` : ""}
+        <div class="d">${esc(f.details)}</div>${f.state_note ? `<div class="sub">Notiz: ${esc(f.state_note)}</div>` : ""}</div>
+      <div class="acts">${done ? `<button class="btn small ghost" data-fstate="offen" data-key="${esc(f.key)}">Wieder öffnen</button>`
+        : `<button class="btn small" data-fstate="umgesetzt" data-key="${esc(f.key)}">Umgesetzt</button><button class="btn small ghost" data-fstate="ignoriert" data-key="${esc(f.key)}">Ignorieren</button>`}</div></div>`;
+  }
+
+  // ── Drawer: Projekt / Datenträger ──────────────
+  function openDrawer(html) { $("#drawer-body").innerHTML = html; $("#drawer").classList.add("open"); $("#drawer").setAttribute("aria-hidden", "false"); $("#scrim").hidden = false; }
+  function closeDrawer() { $("#drawer").classList.remove("open"); $("#drawer").setAttribute("aria-hidden", "true"); $("#scrim").hidden = true; }
+
+  function projectDrawer(id) {
+    const p = S.projById.get(id); if (!p) return;
+    const fs = (S.findByCluster.get(id) || []).sort((a, b) => ["kritisch", "warnung", "info"].indexOf(a.priority) - ["kritisch", "warnung", "info"].indexOf(b.priority));
+    openDrawer(`
+      <div class="sub">${esc(p.date)} · ${fmtGb(p.size_gb)} · ${p.copies}× gesichert</div>
+      <h2>${esc(p.name)}</h2>
+      ${p.aliases.length > 1 ? `<div class="sub">Auch geschrieben als: ${esc(p.aliases.join(" · "))}</div>` : ""}
+      <div class="row" style="margin-top:10px">${statusDot(p)} <span class="muted">${p.ok ? "Erfüllt die Sicherungsregel" : "Erfüllt die Sicherungsregel nicht"}</span></div>
+
+      <div class="block"><h3>Sicherungsregel</h3>
+        <form class="form" id="rule-form">
+          <label class="field">Sicherung
+            <select name="sicherung">${Object.entries(S.meta.sicherung).map(([k, v]) => `<option value="${k}" ${p.sicherung === k ? "selected" : ""}>${esc(v.label)} (${v.min}×)</option>`).join("")}</select></label>
+          <div class="field">Muss zusätzlich liegen auf<div class="checks">${S.meta.tiers.map((t) => `<label><input type="checkbox" name="tier" value="${t}" ${p.require_tiers.includes(t) ? "checked" : ""}> ${tierBadge(t)}</label>`).join("")}</div></div>
+          <label class="field">Notiz<input type="text" name="note" maxlength="500" value="${esc(p.rule_note || "")}" placeholder="z. B. Kunde verlangt 5 Jahre Aufbewahrung"></label>
+          <div class="row"><button class="btn" type="submit">Regel speichern</button>${p.rule_by ? `<span class="hint">zuletzt von ${esc(p.rule_by)}</span>` : ""}</div>
+        </form></div>
+
+      <div class="block"><h3>Ordner &amp; Kopien</h3>
+        ${p.types.map((t) => `<div style="margin-bottom:14px"><div class="row" style="justify-content:space-between"><span class="tc ${copyClass(t.disks)}">${esc(t.type)} <b>${t.disks}×</b></span>
+          ${t.mismatch ? '<span class="sub" style="color:var(--warn)">Größen weichen ab</span>' : ""}</div>
+          ${t.copies.map((c) => `<div class="copy"><div><a href="#" data-disk="${esc(c.disk_uuid)}" class="name">${esc(c.disk)}</a> ${tierBadge(c.tier)} <span class="sub">bei ${esc(c.holder || "?")} · Scan ${rel(c.last_scan)}</span></div>
+            <div class="num r">${fmtGb(c.size_gb)} <span class="sub">${fmtN(c.files)} Dateien</span></div>
+            <div class="path">${esc(c.rel_path)}${c.soll_name ? " → Soll: " + esc(c.soll_name) : ""}</div></div>`).join("")}</div>`).join("")}
+      </div>
+
+      <div class="block"><h3>Befunde</h3>${fs.length ? fs.map(findingRow).join("") : '<div class="muted">Keine.</div>'}</div>`);
+    $("#rule-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        await post("/api/rule", { rule_key: p.rule_key, sicherung: fd.get("sicherung"), require_tiers: fd.getAll("tier"), note: fd.get("note") });
+        toast("Regel gespeichert"); await load(); render(); projectDrawer(id);
+      } catch (err) { toast(err.message, true); }
+    });
+  }
+
+  function diskDrawer(uuid) {
+    const d = S.diskById.get(uuid); if (!d) return;
+    const projs = S.projects.filter((p) => p.types.some((t) => t.copies.some((c) => c.disk_uuid === uuid)));
+    openDrawer(`
+      <div class="sub">${tierBadge(d.tier)} · ${d.used_gb != null ? fmtGb(d.used_gb) + " belegt" : ""}${d.capacity_gb ? " von " + fmtGb(d.capacity_gb) : ""}</div>
+      <h2>${esc(d.name)}</h2>
+      <div class="sub mono">${esc(d.uuid)}</div>
+      <div class="sub">Zuletzt gescannt ${rel(d.last_scan)} von ${esc(d.last_user || "?")}</div>
+      <div class="block"><h3>Angaben</h3>
+        <form class="form" id="disk-form">
+          <label class="field">Speicherstufe<select name="tier"><option value="">– unbekannt –</option>${S.meta.tiers.map((t) => `<option ${d.tier === t && d.tier_source !== "guess" ? "selected" : ""}>${t}</option>`).join("")}</select>
+            ${d.tier_source === "guess" ? `<span class="hint">Aktuell geschätzt: ${esc(d.tier)}. Bitte bestätigen.</span>` : ""}</label>
+          <label class="field">Wer hat sie<input type="text" name="holder" maxlength="100" value="${esc(d.holder_source === "manual" ? d.holder : "")}" placeholder="${esc(d.last_user ? "zuletzt gescannt von " + d.last_user : "Name")}"></label>
+          <label class="field">Standort<input type="text" name="location" maxlength="200" value="${esc(d.location || "")}" placeholder="z. B. Regal B3, Büro, extern bei Jonathan"></label>
+          <label class="field">Notiz<input type="text" name="note" maxlength="500" value="${esc(d.note || "")}"></label>
+          ${d.duplicate_name ? `<div class="checks"><label><input type="checkbox" name="separate" ${d.separate_disk ? "checked" : ""}> Eigene physische Platte (trotz gleichem Namen als Kopie zählen)</label></div>
+            <span class="hint">${d.stale ? "Dieser Eintrag ist älter als ein anderer mit gleichem Namen und zählt deshalb gerade nicht als Kopie." : "Neuester Eintrag mit diesem Namen."}</span>` : ""}
+          <div class="row"><button class="btn" type="submit">Speichern</button></div>
+        </form></div>
+      <div class="block"><h3>Projekte auf dieser Platte (${fmtN(projs.length)})</h3>
+        ${projs.slice(0, 300).map((p) => `<div class="copy"><a href="#" data-proj="${esc(p.id)}" class="name">${esc(p.date)} ${esc(p.name)}</a><span>${statusDot(p)}</span>
+          <div class="path">${esc(p.types.filter((t) => t.copies.some((c) => c.disk_uuid === uuid)).map((t) => t.type + " " + t.disks + "×").join(" · "))}</div></div>`).join("") || '<div class="muted">Keine gültigen Projektordner.</div>'}
+      </div>`);
+    $("#disk-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        await post("/api/disk", { disk_uuid: uuid, tier: fd.get("tier") || null, holder: fd.get("holder"), location: fd.get("location"),
+                                  note: fd.get("note"), separate_disk: fd.get("separate") === "on" });
+        toast("Gespeichert"); await load(); render(); diskDrawer(uuid);
+      } catch (err) { toast(err.message, true); }
+    });
+  }
+
+  // ── Routing & Events ───────────────────────────
+  let current = "uebersicht";
+  async function render() {
+    const [path, qs] = (location.hash.slice(2) || "uebersicht").split("?");
+    current = pages[path] ? path : "uebersicht";
+    document.querySelectorAll(".pages a").forEach((a) => a.classList.toggle("active", a.dataset.page === current));
+    const params = new URLSearchParams(qs || "");
+    const html = await pages[current](params);
+    $("#view").innerHTML = html;
+    if (params.get("p")) projectDrawer(params.get("p"));
+    if (params.get("d")) diskDrawer(params.get("d"));
+  }
+  window.addEventListener("hashchange", () => { closeDrawer(); render(); window.scrollTo(0, 0); });
+  let qt; $("#q").addEventListener("input", () => {
+    clearTimeout(qt);
+    qt = setTimeout(() => { if (current === "uebersicht" || current === "protokoll") location.hash = "#/projekte"; else render(); }, 180);
+  });
+  $("#drawer-close").addEventListener("click", closeDrawer);
+  $("#scrim").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); $("#q").focus(); } });
+
+  document.addEventListener("click", async (e) => {
+    const t = e.target.closest("[data-proj],[data-disk],[data-pf],[data-tier],[data-prio],[data-more],[data-fstate],[data-save-assign],[data-clear-assign]");
+    if (!t) return;
+    if (t.dataset.proj !== undefined) { e.preventDefault(); projectDrawer(t.dataset.proj); return; }
+    if (t.dataset.disk !== undefined) { e.preventDefault(); diskDrawer(t.dataset.disk); return; }
+    if (t.dataset.pf) { ui.proj.filter = t.dataset.pf; ui.proj.limit = 150; history.replaceState(null, "", "#/projekte"); return render(); }
+    if (t.dataset.tier) { ui.disk.tier = t.dataset.tier; return render(); }
+    if (t.dataset.prio) { ui.find.prio = t.dataset.prio; ui.find.type = ""; return render(); }
+    if (t.dataset.more) { if (t.dataset.more === "proj") ui.proj.limit += 300; else ui.assign.limit += 200; return render(); }
+    if (t.dataset.fstate) {
+      let note = null;
+      if (t.dataset.fstate !== "offen") { note = prompt(t.dataset.fstate === "umgesetzt" ? "Was wurde gemacht? (optional)" : "Warum ignorieren? (optional)"); if (note === null) return; }
+      try { await post("/api/finding", { finding_key: t.dataset.key, status: t.dataset.fstate, note }); toast("Gespeichert"); await load(); render();
+        if ($("#drawer").classList.contains("open")) closeDrawer(); } catch (err) { toast(err.message, true); }
+      return;
+    }
+    const idx = t.dataset.saveAssign ?? t.dataset.clearAssign;
+    if (idx !== undefined) {
+      const s = q();
+      const list = S.unassigned.filter((u) => !s || [u.name, u.disk, u.soll_name].some((x) => String(x || "").toLowerCase().includes(s)));
+      const u = list[Number(idx)];
+      const value = t.dataset.clearAssign !== undefined ? "" : $(`[data-assign="${idx}"]`).value.trim();
+      t.disabled = true;
+      try { await post("/api/override", { disk_uuid: u.disk_uuid, rel_path: u.rel_path, soll_name: value });
+        toast(value ? "Zugeordnet" : "Zuordnung entfernt"); await load(); render(); } catch (err) { toast(err.message, true); t.disabled = false; }
+    }
+  });
+  document.addEventListener("change", (e) => {
+    if (e.target.id === "ftype") { ui.find.type = e.target.value; render(); }
+    if (e.target.id === "fstatus") { ui.find.status = e.target.value; render(); }
+  });
+
+  load().then(render).catch((e) => { $("#view").innerHTML = `<div class="empty">Konnte Daten nicht laden: ${esc(e.message)}</div>`; });
+})();

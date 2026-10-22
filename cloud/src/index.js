@@ -14,6 +14,7 @@
  */
 
 import { runNotionSync } from "./notion_sync.js";
+import { deriveIfChanged } from "./derive.js";
 
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), {
@@ -222,12 +223,16 @@ async function buildBoard(env) {
 
 export default {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(
-      runNotionSync(env).then(
-        (r) => console.log("notion-sync", JSON.stringify({ synced: r.disks.length, pending: r.pending, calls: r.calls })),
-        (e) => console.error("notion-sync failed", String(e)),
-      ),
-    );
+    ctx.waitUntil((async () => {
+      try {
+        const d = await deriveIfChanged(env); // projects/cluster fürs Dashboard aktuell halten
+        if (!d.skipped) console.log("derive", JSON.stringify(d));
+      } catch (e) { console.error("derive failed", String(e)); }
+      try {
+        const r = await runNotionSync(env);
+        console.log("notion-sync", JSON.stringify({ synced: r.disks.length, pending: r.pending, calls: r.calls }));
+      } catch (e) { console.error("notion-sync failed", String(e)); }
+    })());
   },
 
   async fetch(request, env) {
