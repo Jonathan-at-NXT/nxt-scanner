@@ -207,3 +207,28 @@ def test_report_from_catalog_expands_containers(tmp_path):
     assert top["UNSORTED ARCHIVE/_TO CHECK/2024-03-12-ETP-VIDEOS"]["size_bytes"] == 20
     assert any(n["rel_path"] == "2025-01-01_A_FOOTAGE/FX3" and n["depth"] == 2 for n in rep["folder_tree"])
     assert rep["scan_info"]["complete"] and rep["scan_info"]["valid_folders"] == 3
+
+
+def test_vanished_files_are_not_errors(tmp_path, monkeypatch):
+    _write(tmp_path, "P/a.mp4"); _write(tmp_path, "P/b.mp4")
+    real = os.DirEntry.stat if hasattr(os, "DirEntry") else None
+    conn = catalog.connect(":memory:")
+    orig = catalog.os.scandir
+
+    class Gone:
+        def __init__(self, e): self._e = e; self.name = e.name; self.path = e.path
+        def is_dir(self, follow_symlinks=False): return self._e.is_dir(follow_symlinks=follow_symlinks)
+        def is_file(self, follow_symlinks=False): return self._e.is_file(follow_symlinks=follow_symlinks)
+        def stat(self, follow_symlinks=False):
+            if self.name == "b.mp4":
+                raise FileNotFoundError(2, "No such file or directory")
+            return self._e.stat(follow_symlinks=follow_symlinks)
+
+    class Ctx:
+        def __init__(self, p): self._it = orig(p)
+        def __enter__(self): return [Gone(e) for e in self._it.__enter__()]
+        def __exit__(self, *a): return self._it.__exit__(*a)
+
+    monkeypatch.setattr(catalog.os, "scandir", Ctx)
+    r = catalog.inventory(str(tmp_path), conn, vol=_vol())
+    assert r["complete"] and r["files"] == 1 and r["errors"] == 0

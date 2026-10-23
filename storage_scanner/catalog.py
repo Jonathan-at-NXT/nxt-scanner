@@ -55,6 +55,9 @@ CREATE INDEX IF NOT EXISTS idx_file_fp ON file(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_file_name_size ON file(name, size);
 CREATE INDEX IF NOT EXISTS idx_file_vol_present ON file(volume_uuid, present);
 CREATE INDEX IF NOT EXISTS idx_file_changed ON file(changed_at);
+CREATE TABLE IF NOT EXISTS run_error (
+    run_started TEXT, volume_uuid TEXT, path TEXT, message TEXT
+);
 CREATE TABLE IF NOT EXISTS run (
     id INTEGER PRIMARY KEY, volume_uuid TEXT, kind TEXT,
     started_at TEXT, finished_at TEXT, host TEXT,
@@ -208,8 +211,16 @@ def walk_files(root: Path, errors: list):
         try:
             with os.scandir(d) as it:
                 entries = list(it)
+        except FileNotFoundError:
+            if not root.is_dir():
+                errors.append((str(root), "Datenträger nicht mehr erreichbar (abgezogen/getrennt)"))
+                return
+            continue  # Ordner zwischenzeitlich gelöscht/umbenannt
         except OSError as e:
             errors.append((str(d), str(e)))
+            if not root.is_dir():
+                errors.append((str(root), "Datenträger nicht mehr erreichbar (abgezogen/getrennt)"))
+                return
             continue
         for e in entries:
             n = e.name
@@ -220,6 +231,8 @@ def walk_files(root: Path, errors: list):
                     stack.append(Path(e.path))
                 elif e.is_file(follow_symlinks=False):
                     yield os.path.relpath(e.path, root), e.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue  # zwischen Auflisten und stat() verschwunden (z. B. Lightroom-Vorschauen) - kein Lesefehler
             except OSError as err:
                 errors.append((e.path, str(err)))
 
@@ -311,8 +324,14 @@ def inventory(mount: str, conn: sqlite3.Connection, vol: dict | None = None,
                    removed,hashed,errors,complete) VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?)""",
             (uuid, "inventory", started, finished, host, stats["files"], stats["bytes"],
              stats["added"], stats["changed"], stats["removed"], len(errors), int(complete)))
+    if errors:
+        with conn:
+            conn.executemany("INSERT INTO run_error(run_started, volume_uuid, path, message) VALUES(?,?,?,?)",
+                             [(started, uuid, p, m[:300]) for p, m in errors])
     for path, msg in errors[:20]:
         _log.warning("Inventur-Fehler %s: %s", path, msg)
+    if len(errors) > 20:
+        _log.warning("… %d weitere Fehler (Tabelle run_error)", len(errors) - 20)
     return {**stats, "uuid": uuid, "name": vol["name"], "errors": len(errors), "complete": complete}
 
 
