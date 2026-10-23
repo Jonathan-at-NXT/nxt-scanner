@@ -506,6 +506,10 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("inventory", help="alle Dateien eines Volumes erfassen (nur stat)")
     p.add_argument("mount")
+    p.add_argument("--uuid", help="feste Kennung für Freigaben ohne Volume-UUID (z. B. nas:NXTCLOUD/NXT STUDIOS)")
+    p.add_argument("--name", help="Anzeigename (Default: Ordnername)")
+    p = sub.add_parser("report", help="Scan-Report aus dem Katalog bauen und nach D1 hochladen")
+    p.add_argument("mount"); p.add_argument("--uuid", required=True); p.add_argument("--name")
     p = sub.add_parser("hash", help="Fingerprints nachziehen (liest Dateien)")
     p.add_argument("mount")
     p.add_argument("--minutes", type=float, help="Zeitbudget, danach sauber abbrechen")
@@ -522,7 +526,12 @@ def main(argv=None):
 
     conn = connect(args.db)
     if args.cmd == "inventory":
-        r = inventory(args.mount, conn)
+        vol = None
+        if args.uuid:
+            vol = volume_info(args.mount, serials={})
+            vol["uuid"] = args.uuid
+            vol["name"] = args.name or vol["name"]
+        r = inventory(args.mount, conn, vol=vol)
         print(f"{r['name']} ({r['uuid']}): {r['files']} Dateien, {_fmt(r['bytes'])} | "
               f"neu {r['added']}, geändert {r['changed']}, weg {r['removed']}, Fehler {r['errors']}"
               + ("" if r["complete"] else "  [UNVOLLSTÄNDIG]"))
@@ -547,6 +556,21 @@ def main(argv=None):
     elif args.cmd == "find":
         for r in find_folders(conn, args.name):
             print(f"{r['volume']:16} {r['files']:>7} Dateien {_fmt(r['bytes']):>10}  {r['folder']!r}")
+    elif args.cmd == "report":
+        from .paths import REPORTS_DIR
+        from . import outbox
+        from .notion_sync import load_config
+        rep = report_from_catalog(conn, args.uuid, str(Path(args.mount)), name=args.name)
+        if not rep["scan_info"]["complete"]:
+            raise SystemExit("Letzte Inventur war unvollständig – kein Upload.")
+        name = args.name or Path(args.mount).name
+        rep["scan_info"]["scanned_path"] = str(Path(args.mount).parent / name)  # Anzeigename in D1
+        out = REPORTS_DIR / (name.replace(" ", "_").replace("/", "_") + "_report.json")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rep, ensure_ascii=False, indent=1))
+        outbox.enqueue(str(out), channels=outbox.channels_for(load_config()))
+        print(f"Report: {len(rep['folder_tree'])} Knoten, {rep['scan_info']['valid_folders']} gültige Projektordner → {out}")
+        print("Upload:", outbox.flush_safe())
     elif args.cmd == "stats":
         rows = conn.execute(
             """SELECT v.name, v.uuid, v.device_serial, COUNT(f.id), COALESCE(SUM(f.size),0),
@@ -561,3 +585,93 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
+
+# ── Scan-Report aus dem Katalog (für Netzfreigaben wie das NAS) ────
+
+_FLAT_CONTAINERS = {"NXT STUDIOS", "OLDER"}   # wie scan.py: Inhalt zählt als oberste Ebene
+
+
+def report_from_catalog(conn: sqlite3.Connection, uuid: str, mount: str, name: str | None = None,
+                        max_container_depth: int = 2) -> dict:
+    """Baut einen Scan-Report (scan_info + folder_tree bis Tiefe 3) aus dem Datei-Katalog.
+
+    Ein Durchlauf über die Freigabe (Inventur) statt du/find je Ordner: für ~80 TB über
+    SMB deutlich schneller und ohne Zeitlimits. Sammelordner werden aufgelöst: die festen
+    Container (NXT STUDIOS, OLDER) wie im Scanner, und allgemein jeder Ordner ohne gültigen
+    Projektnamen, der Projektordner enthält (z. B. "UNSORTED ARCHIVE", "CONNOR").
+    """
+    from .rules import validate_folder
+    from .report import _disk_usage
+    rows = conn.execute("SELECT rel_path, size, mtime FROM file WHERE volume_uuid=? AND present=1", (uuid,)).fetchall()
+
+    # Verzeichnisbaum aus Dateipfaden: Kinder je Ordner
+    children: dict[str, set] = {}
+    for rel, _, _ in rows:
+        parts = rel.split("/")[:-1]
+        for i in range(len(parts)):
+            parent = "/".join(parts[:i])
+            children.setdefault(parent, set()).add(parts[i])
+
+    def has_project(path: str, levels: int) -> bool:
+        """Liegt innerhalb von `levels` Ebenen unter path ein gültiger Projektordner?"""
+        if levels <= 0:
+            return False
+        for k in children.get(path, ()):
+            if validate_folder(k) or has_project(f"{path}/{k}", levels - 1):
+                return True
+        return False
+
+    def expand(prefix: str, depth: int) -> list[tuple[str, str]]:
+        """Liefert (rel_path_für_D1, echter_pfad) der Projekt-Einheiten unter prefix."""
+        units = []
+        for d in sorted(children.get(prefix, ())):
+            real = f"{prefix}/{d}" if prefix else d
+            if d.startswith(".") or d.startswith("#") or d.startswith("@"):
+                continue  # #recycle, .snapshot, @eaDir …
+            kids = children.get(real, set())
+            if not prefix and d.upper() in _FLAT_CONTAINERS:
+                units += [(k, f"{real}/{k}") for k in sorted(kids) if not k.startswith((".", "#", "@"))]
+                continue
+            if depth < max_container_depth and not validate_folder(d) and has_project(real, max_container_depth - depth):
+                units += expand(real, depth + 1)
+                continue
+            units.append((real, real))
+        return units
+
+    units = expand("", 0)
+    # Größen/Dateizahlen/mtime je echtem Ordnerpfad (kumulativ) bis 2 Ebenen unter der Einheit
+    agg: dict[str, list] = {}
+    unit_by_real = {real: rel for rel, real in units}
+    for rel, size, mtime in rows:
+        parts = rel.split("/")
+        for i in range(1, len(parts)):
+            p = "/".join(parts[:i])
+            a = agg.setdefault(p, [0, 0, 0.0])
+            a[0] += size or 0; a[1] += 1; a[2] = max(a[2], mtime or 0)
+
+    from datetime import datetime as _dt
+    iso = lambda ts: _dt.fromtimestamp(ts).isoformat() if ts else None
+    tree = []
+    for rel, real in units:
+        a = agg.get(real, [0, 0, 0])
+        tree.append({"rel_path": rel, "abs_path": f"{mount}/{real}", "depth": 1, "parent_rel_path": None,
+                     "size_bytes": a[0], "file_count": a[1], "mtime": iso(a[2])})
+        for c in sorted(children.get(real, ())):
+            cr = f"{real}/{c}"; ca = agg.get(cr, [0, 0, 0])
+            tree.append({"rel_path": f"{rel}/{c}", "abs_path": f"{mount}/{cr}", "depth": 2, "parent_rel_path": rel,
+                         "size_bytes": ca[0], "file_count": ca[1], "mtime": iso(ca[2])})
+            for g in sorted(children.get(cr, ())):
+                gr = f"{cr}/{g}"; ga = agg.get(gr, [0, 0, 0])
+                tree.append({"rel_path": f"{rel}/{c}/{g}", "abs_path": f"{mount}/{gr}", "depth": 3,
+                             "parent_rel_path": f"{rel}/{c}", "size_bytes": ga[0], "file_count": ga[1], "mtime": iso(ga[2])})
+    valid = sum(1 for rel, _ in units if validate_folder(rel.split("/")[-1]))
+    run = conn.execute("SELECT complete FROM run WHERE volume_uuid=? AND kind='inventory' ORDER BY id DESC LIMIT 1", (uuid,)).fetchone()
+    from zoneinfo import ZoneInfo
+    return {
+        "scan_info": {"scanned_path": mount, "scan_date": _dt.now(ZoneInfo("Europe/Berlin")).isoformat(),
+                      "total_folders": len(units), "valid_folders": valid, "unassigned_folders": len(units) - valid,
+                      "volume_uuid": uuid, "disk_usage": _disk_usage(mount),
+                      "complete": bool(run and run[0]), "incomplete_folders": [], "source": "catalog"},
+        "projects": [], "unassigned": [], "folder_tree": tree, "_display_name": name,
+    }

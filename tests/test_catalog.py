@@ -189,3 +189,21 @@ def test_find_folders_across_volumes_and_depths(tmp_path):
     found = {(r["volume"], r["folder"]): r["files"] for r in catalog.find_folders(conn, "loco chips_footage")}
     assert found == {("NXT HUB 05", "NXT STUDIOS/2025-04-01_LOCO CHIPS_FOOTAGE"): 1,
                      ("TOWER 7", "2025-04-01_LOCO CHIPS_FOOTAGE"): 1}
+
+
+def test_report_from_catalog_expands_containers(tmp_path):
+    _write(tmp_path, "NXT STUDIOS/2025-01-01_A_FOOTAGE/FX3/c1.mp4", b"x" * 10)
+    _write(tmp_path, "UNSORTED ARCHIVE/_TO CHECK/2024-03-12-ETP-VIDEOS/v.mp4", b"y" * 20)
+    _write(tmp_path, "CONNOR/2025-02-06_KTM HQ DOKU_Footage/FX3 NILS/a.mp4", b"z" * 5)
+    _write(tmp_path, "LOSE ORDNER/x.txt", b"1")
+    _write(tmp_path, "#recycle/old.mp4", b"r")
+    conn = catalog.connect(":memory:")
+    catalog.inventory(str(tmp_path), conn, vol=_vol("nas:X", "NXT STUDIOS"))
+    rep = catalog.report_from_catalog(conn, "nas:X", str(tmp_path))
+    top = {n["rel_path"]: n for n in rep["folder_tree"] if n["depth"] == 1}
+    assert set(top) == {"2025-01-01_A_FOOTAGE", "UNSORTED ARCHIVE/_TO CHECK/2024-03-12-ETP-VIDEOS",
+                        "CONNOR/2025-02-06_KTM HQ DOKU_Footage", "LOSE ORDNER"}
+    assert top["2025-01-01_A_FOOTAGE"]["abs_path"].endswith("NXT STUDIOS/2025-01-01_A_FOOTAGE")
+    assert top["UNSORTED ARCHIVE/_TO CHECK/2024-03-12-ETP-VIDEOS"]["size_bytes"] == 20
+    assert any(n["rel_path"] == "2025-01-01_A_FOOTAGE/FX3" and n["depth"] == 2 for n in rep["folder_tree"])
+    assert rep["scan_info"]["complete"] and rep["scan_info"]["valid_folders"] == 3
