@@ -518,4 +518,17 @@
   });
 
   load().then(render).catch((e) => { $("#view").innerHTML = `<div class="empty">Konnte Daten nicht laden: ${esc(e.message)}</div>`; });
+
+  // Automatisch aktualisieren: jede Minute, nur sichtbarer Tab, nie während Eingabe/Detailansicht
+  setInterval(async () => {
+    if (document.hidden || current === "protokoll") return;
+    const a = document.activeElement;
+    if ($("#drawer").classList.contains("open") || (a && ["INPUT", "SELECT", "TEXTAREA"].includes(a.tagName) && a.id !== "q")) return;
+    const before = S && JSON.stringify([S.meta.last_scan, S.overview, S.cleanup && S.cleanup.phase1.fresh, S.findings.length]);
+    try {
+      await load();
+      const after = JSON.stringify([S.meta.last_scan, S.overview, S.cleanup && S.cleanup.phase1.fresh, S.findings.length]);
+      if (before !== after) { const y = window.scrollY; await render(); window.scrollTo(0, y); toast("Neue Scan-Daten"); }
+    } catch {}
+  }, 60000);
 })();

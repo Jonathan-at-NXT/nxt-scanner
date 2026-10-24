@@ -235,7 +235,7 @@ export default {
     })());
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (url.pathname === "/notion-sync" && request.method === "POST") {
@@ -437,6 +437,8 @@ export default {
       } catch (e) {
         return json({ error: "db", detail: String(e) }, 500);
       }
+      // Projekt-Zuordnung sofort neu rechnen, damit das Dashboard nicht auf den Cron wartet
+      ctx.waitUntil(deriveIfChanged(env).catch((e) => console.error("derive nach ingest", String(e))));
 
       return json({ ok: true, disk: uuid, nodes: tree.length });
     }
