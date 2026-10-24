@@ -98,7 +98,8 @@ async function handleWrite(path, body, env, user) {
     const key = clean(body.rule_key, 300);
     if (!key) throw new Error("Projekt fehlt");
     const cur = (await env.DB.prepare("SELECT * FROM project_rule WHERE rule_key=?").bind(key).first()) || {};
-    const next = { sicherung: cur.sicherung || "doppelt", require_tiers: cur.require_tiers || "", note: cur.note ?? null };
+    const next = { sicherung: cur.sicherung || "doppelt", require_tiers: cur.require_tiers || "", note: cur.note ?? null,
+                   ref_copies: cur.ref_copies || null };
     const changed = {};
     if ("sicherung" in body) {
       if (!(body.sicherung in SICHERUNG)) throw new Error("Unbekannte Sicherung");
@@ -115,12 +116,25 @@ async function handleWrite(path, body, env, user) {
       if (n !== next.note) changed.note = [next.note, n];
       next.note = n;
     }
+    // Sollstand je Ordnertyp: {"FOOTAGE": "<disk_uuid>" | null}; nur genannte Typen ändern sich
+    if (body.ref_copies && typeof body.ref_copies === "object") {
+      let refs = {};
+      try { refs = JSON.parse(next.ref_copies || "{}") || {}; } catch { refs = {}; }
+      for (const [t, u] of Object.entries(body.ref_copies)) {
+        const tt = clean(t, 30), uu = u == null ? null : clean(u, 100);
+        if (!tt) continue;
+        if (uu) refs[tt] = uu; else delete refs[tt];
+      }
+      const val = Object.keys(refs).length ? JSON.stringify(refs) : null;
+      if (val !== next.ref_copies) changed.ref_copies = [next.ref_copies, val];
+      next.ref_copies = val;
+    }
     if (!Object.keys(changed).length) return { ok: true, unchanged: true };
     await env.DB.prepare(
-      `INSERT INTO project_rule(rule_key, sicherung, require_tiers, note, updated_by, updated_at) VALUES(?,?,?,?,?,?)
+      `INSERT INTO project_rule(rule_key, sicherung, require_tiers, note, ref_copies, updated_by, updated_at) VALUES(?,?,?,?,?,?,?)
        ON CONFLICT(rule_key) DO UPDATE SET sicherung=excluded.sicherung, require_tiers=excluded.require_tiers,
-         note=excluded.note, updated_by=excluded.updated_by, updated_at=excluded.updated_at`
-    ).bind(key, next.sicherung, next.require_tiers, next.note, who, now()).run();
+         note=excluded.note, ref_copies=excluded.ref_copies, updated_by=excluded.updated_by, updated_at=excluded.updated_at`
+    ).bind(key, next.sicherung, next.require_tiers, next.note, next.ref_copies, who, now()).run();
     await audit(env, who, "regel", key, changed);
     return { ok: true };
   }

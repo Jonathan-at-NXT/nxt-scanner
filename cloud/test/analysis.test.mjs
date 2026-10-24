@@ -28,3 +28,27 @@ test("Tagesordner auf derselben Platte werden addiert", () => {
   });
   assert.equal(a.projects[0].types[0].disks, 2);
 });
+
+test("Teilkopien werden frei, sobald die Regel mit vollständigen Kopien erfüllt ist", () => {
+  const a = analyze({
+    disks: [disk("A", "VB02"), disk("B", "TOWER 10"), disk("C", "NXT 013")],
+    projects: [proj("A", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 260), proj("B", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 259),
+               proj("C", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 135)],
+  });
+  const f = a.findings.find((x) => x.type === "PARTIAL_COPY");
+  assert.equal(f.savings_gb, 135);
+  assert.equal(a.cleanup.phase4.partial_gb, 135);
+});
+
+test("Sollstand: kleinere Kopie als Referenz, Mehrmaterial wird frei", () => {
+  const p = (d, gb) => ({ ...proj(d, "2023-05-19_SPEC X_FOOTAGE", gb), date: "2023-05-19", project_name: "SPEC X", norm_name: "SPEC X", cluster_id: "2023-05-19|SPEC X" });
+  const a = analyze({
+    disks: [disk("A", "NB 01"), disk("B", "Tower 3"), disk("C", "NXT HUB 02")],
+    projects: [p("A", 3690), p("B", 1720), p("C", 1720)],
+    rules: [{ rule_key: "2023-05-19|SPEC X", sicherung: "doppelt", ref_copies: JSON.stringify({ FOOTAGE: "B" }) }],
+  });
+  const t = a.projects[0].types[0];
+  assert.equal(t.disks, 3);
+  assert.equal(t.size_gb, 1720);
+  assert.equal(a.findings.find((x) => x.type === "REF_EXTRA").savings_gb, 1970);
+});

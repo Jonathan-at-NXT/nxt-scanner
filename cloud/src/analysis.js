@@ -15,7 +15,7 @@ export const SICHERUNG = {
 export const DEFAULT_SICHERUNG = "doppelt";
 export const TIERS = ["SSD", "HDD", "NAS", "CLOUD"];
 export const PRIORITY = { MISSING_BACKUP: "kritisch", TIER_MISSING: "kritisch", SIZE_MISMATCH: "warnung",
-  INCOMPLETE_BACKUP: "warnung", EXCESS_COPIES: "info", UMBENENNEN: "info", DUPLICATE_DISK_NAME: "info",
+  INCOMPLETE_BACKUP: "warnung", EXCESS_COPIES: "info", PARTIAL_COPY: "info", REF_EXTRA: "info", UMBENENNEN: "info", DUPLICATE_DISK_NAME: "info",
   DISK_DEFECT: "kritisch", DISK_WARN: "warnung" };
 
 const gb = (b) => Math.round(((b || 0) / 1e9) * 100) / 100;
@@ -110,6 +110,8 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
     const sicherung = rule?.sicherung && SICHERUNG[rule.sicherung] ? rule.sicherung : DEFAULT_SICHERUNG;
     const min = SICHERUNG[sicherung].min;
     const requireTiers = (rule?.require_tiers || "").split(",").map((s) => s.trim()).filter(Boolean);
+    let refCopies = {};
+    try { refCopies = JSON.parse(rule?.ref_copies || "{}") || {}; } catch { refCopies = {}; }
 
     const byType = new Map();
     for (const m of members) {
@@ -125,20 +127,23 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       const perDisk = new Map();
       for (const r of rows) perDisk.set(r.disk_uuid, (perDisk.get(r.disk_uuid) || 0) + gb(r.size_bytes));
       const fullest = Math.max(0, ...perDisk.values());
-      const isFull = (u) => fullest < SMALL_COPY_GB || perDisk.get(u) >= fullest * FULL_COPY_RATIO;
+      // Sollstand: manuell gewählte Kopie (z. B. ohne bewusst gelöschte Recorder-Daten), sonst die vollständigste
+      const ref = refCopies[t] && perDisk.has(refCopies[t]) ? refCopies[t] : null;
+      const refGb = ref ? perDisk.get(ref) : fullest;
+      const isFull = (u) => refGb < SMALL_COPY_GB || perDisk.get(u) >= refGb * FULL_COPY_RATIO;
       const disksOf = [...perDisk.keys()].filter(isFull);
       const partialDisks = [...perDisk.keys()].filter((u) => !isFull(u));
       const copies = rows.map((r) => ({
         disk_uuid: r.disk_uuid, disk: disk.get(r.disk_uuid)?.name || "?", tier: disk.get(r.disk_uuid)?.tier || null,
         holder: disk.get(r.disk_uuid)?.holder || null, last_scan: disk.get(r.disk_uuid)?.last_scan || null,
         rel_path: r.rel_path, name: r.name, soll_name: r.soll_name || null,
-        size_gb: gb(r.size_bytes), files: r.file_count, full: isFull(r.disk_uuid),
+        size_gb: gb(r.size_bytes), files: r.file_count, full: isFull(r.disk_uuid), ref: r.disk_uuid === ref,
       })).sort((a, b) => (b.full - a.full) || a.disk.localeCompare(b.disk, "de", { numeric: true }));
       const sizes = disksOf.map((u) => Math.round(perDisk.get(u) * 100) / 100);
-      const maxGb = Math.round(fullest * 100) / 100;
+      const maxGb = Math.round(refGb * 100) / 100;
       sizeGb += maxGb;
       minCopies = Math.min(minCopies, disksOf.length);
-      types.push({ type: t, copies, disks: disksOf.length, size_gb: maxGb, partial: partialDisks.length,
+      types.push({ type: t, copies, disks: disksOf.length, size_gb: maxGb, partial: partialDisks.length, ref,
                    mismatch: disksOf.length >= 2 && new Set(sizes).size > 1 });
 
       const label = `${members[0].date} ${members[0].project_name}`;
@@ -155,7 +160,21 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
               disks: disksOf, diff_gb: diff, size_gb: maxGb,
               details: disksOf.map((u) => `${disk.get(u)?.name || "?"}: ${fg(perDisk.get(u))}`).join(" vs ") + ` (Differenz ${fg(diff)})` });
       }
-      if (disksOf.length > Math.max(min, 2)) {
+      // Teilkopien sind überflüssig, sobald die Regel mit vollständigen Kopien erfüllt ist (Löschbar zählt eigens)
+      if (partialDisks.length && sicherung !== "loeschbar" && disksOf.length >= Math.max(min, 1)) {
+        const pgb = partialDisks.reduce((s, u) => s + perDisk.get(u), 0);
+        add({ key: `PARTIAL_COPY|${cid}|${t}`, type: "PARTIAL_COPY", cluster: cid, project: label, folder_type: t,
+              disks: partialDisks, size_gb: maxGb, savings_gb: Math.round(pgb * 100) / 100,
+              details: `${disksOf.length}× vollständig, dazu Teilkopien: ` + partialDisks.map((u) => `${disk.get(u)?.name || "?"} (${fg(perDisk.get(u))})`).join(", ") });
+      }
+      // Mehr als der Sollstand: bewusst entferntes Material (z. B. Recorder-Daten) liegt auf größeren Kopien noch drin
+      if (ref) {
+        const extra = disksOf.map((u) => [u, perDisk.get(u) - refGb]).filter(([, x]) => x > Math.max(SMALL_COPY_GB, refGb * (1 - FULL_COPY_RATIO)));
+        if (extra.length) add({ key: `REF_EXTRA|${cid}|${t}`, type: "REF_EXTRA", cluster: cid, project: label, folder_type: t,
+              disks: extra.map(([u]) => u), size_gb: maxGb, savings_gb: Math.round(extra.reduce((s, [, x]) => s + x, 0) * 100) / 100,
+              details: `Sollstand ${fg(refGb)} (${disk.get(ref)?.name || "?"}); mehr Material auf: ` + extra.map(([u, x]) => `${disk.get(u)?.name || "?"} (+${fg(x)})`).join(", ") });
+      }
+      if (disksOf.length > Math.max(min, 2) && sicherung !== "einfach" && sicherung !== "loeschbar") {
         const extra = disksOf.length - Math.max(min, 2);
         add({ key: `EXCESS_COPIES|${cid}|${t}`, type: "EXCESS_COPIES", cluster: cid, project: label, folder_type: t,
               disks: disksOf, size_gb: maxGb, savings_gb: Math.round(maxGb * extra * 100) / 100,
@@ -290,7 +309,7 @@ function overview(projects, disks, findings) {
     disks_warn: realDisks.filter((d) => d.health?.verdict === "warnung").length,
     disks_checked: realDisks.filter((d) => d.health).length,
     unsecured_partial: projects.filter((p) => p.level === "teilweise").length,
-    savings_tb: Math.round(open.filter((f) => f.type === "EXCESS_COPIES").reduce((s, f) => s + (f.savings_gb || 0), 0) / 10) / 100,
+    savings_tb: Math.round(open.filter((f) => ["EXCESS_COPIES", "PARTIAL_COPY", "REF_EXTRA"].includes(f.type)).reduce((s, f) => s + (f.savings_gb || 0), 0) / 10) / 100,
     findings: byPrio, tier_tb: Object.fromEntries(Object.entries(tierGb).map(([k, v]) => [k, Math.round(v / 10) / 100])),
     next: unsecured.sort((a, b) => b.missing_gb - a.missing_gb).slice(0, 8)
       .map((p) => ({ id: p.id, name: `${p.date} ${p.name}`, size_gb: p.size_gb, missing_gb: p.missing_gb, level: p.level,
@@ -406,13 +425,15 @@ export function cleanupPlan(projects, disks, findings, now = Date.now(), reserve
                    rounds: copyRounds, unplaced_gb: round(unplacedGb) };
 
   // Phase 4: Freigeben
-  const excessGb = findings.filter((f) => f.type === "EXCESS_COPIES" && f.status === "offen").reduce((s, f) => s + (f.savings_gb || 0), 0);
+  const sumOpen = (type) => findings.filter((f) => f.type === type && f.status === "offen").reduce((s, f) => s + (f.savings_gb || 0), 0);
+  const excessGb = sumOpen("EXCESS_COPIES"), partialGb = sumOpen("PARTIAL_COPY"), refExtraGb = sumOpen("REF_EXTRA");
   const deletable = projects.filter((p) => p.sicherung === "loeschbar");
   const deletableGb = deletable.reduce((s, p) => s + p.types.reduce((x, t) => x + t.copies.reduce((y, c) => y + c.size_gb, 0), 0), 0);
   const singleExtraGb = projects.filter((p) => p.sicherung === "einfach")
     .reduce((s, p) => s + p.types.reduce((x, t) => x + Math.max(0, t.disks - 1) * t.size_gb, 0), 0);
-  const phase4 = { excess_gb: round(excessGb), deletable_gb: round(deletableGb), single_extra_gb: round(singleExtraGb),
-                   total_gb: round(excessGb + deletableGb + singleExtraGb), deletable_projects: deletable.length };
+  const phase4 = { excess_gb: round(excessGb), partial_gb: round(partialGb), ref_extra_gb: round(refExtraGb),
+                   deletable_gb: round(deletableGb), single_extra_gb: round(singleExtraGb),
+                   total_gb: round(excessGb + partialGb + refExtraGb + deletableGb + singleExtraGb), deletable_projects: deletable.length };
 
   // Platzbilanz (Ziel-Platz auf HDD/NAS ohne 5 % Reserve)
   const freeHdd = real.filter((d) => ["HDD", "NAS"].includes(d.tier) && d.free_gb != null)
