@@ -291,6 +291,7 @@ function overview(projects, disks, findings) {
 // ── Aufräum-Plan ──────────────────────────────────────────────────
 export const STALE_DAYS = 60;        // älter = für den Überblick neu scannen
 const MARGIN = 0.05;                 // Ziele nie über 95 % füllen
+const SMALL_TB = 6;                  // Platten bis zu dieser Größe kommen in den Runden zuletzt
 const PORTS = 3;                     // Anschlüsse; ein Gehäuse mit mehreren Platten belegt nur einen
 export const DEFAULT_RESERVE_MONTHS = 3;   // Platz für neue Drehs, die in dieser Zeit dazukommen (einstellbar)
 
@@ -317,7 +318,7 @@ export function cleanupPlan(projects, disks, findings, now = Date.now(), reserve
   // Runden: je Halter:in gebündelt, max. PORTS Anschlüsse; Platten eines Gehäuses = ein Anschluss
   // (dann werden auch die aktuellen Platten des Gehäuses mitgescannt – sie hängen ja eh dran)
   const scanRounds = [];
-  const pack = (d) => ({ uuid: d.uuid, name: d.name, tier: d.tier, enclosure: d.enclosure || null,
+  const pack = (d) => ({ uuid: d.uuid, name: d.name, tier: d.tier, enclosure: d.enclosure || null, capacity_gb: d.capacity_gb,
     last_scan: d.last_scan, age_days: Number.isFinite(ageDays(d)) ? Math.round(ageDays(d)) : null });
   for (const [holder, ds] of [...byHolder].sort((a, b) => b[1].length - a[1].length)) {
     const units = new Map();
@@ -326,12 +327,17 @@ export function cleanupPlan(projects, disks, findings, now = Date.now(), reserve
       if (!units.has(key)) units.set(key, []);
       units.get(key).push(d);
     }
-    const list = [...units.values()].sort((a, b) => b.length - a.length);
+    // Große Kaliber zuerst: Einheiten nach Kapazität (Gehäuse = Summe), kleine (<= SMALL_TB) ans Ende
+    const capOf = (u) => u.reduce((x, d) => x + (d.capacity_gb || d.used_gb || 0), 0);
+    const list = [...units.values()].sort((a, b) => capOf(b) - capOf(a));
     for (let i = 0; i < list.length; i += PORTS) {
       const group = list.slice(i, i + PORTS);
-      scanRounds.push({ holder, ports: group.length, disks: group.flat().map(pack) });
+      const capGb = group.reduce((x, u) => x + capOf(u), 0);
+      scanRounds.push({ holder, ports: group.length, cap_gb: Math.round(capGb),
+                        small: group.every((u) => capOf(u) <= SMALL_TB * 1000), disks: group.flat().map(pack) });
     }
   }
+  scanRounds.sort((a, b) => (a.small - b.small) || b.cap_gb - a.cap_gb);
   const phase1 = { total: real.length + (hasNas ? 0 : 1), fresh: real.length - toScan.length,
                    nas_missing: !hasNas, rounds: scanRounds };
 

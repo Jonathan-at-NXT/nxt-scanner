@@ -131,8 +131,8 @@
       <div class="grid two section">
         <div class="panel"><h3>Phase 1 · Nächste Anschluss-Runden (Überblick)</h3>
           ${c.phase1.nas_missing ? `<div class="round"><b>NAS</b> <span class="muted">vollständig erfassen (per Kabel am Sicherungs-Mac oder Intel-Mac)</span></div>` : ""}
-          ${c.phase1.rounds.length ? c.phase1.rounds.slice(0, 6).map((r, i) => `<div class="round"><div><b>Runde ${i + 1}</b> <span class="muted">· bei ${esc(r.holder)} · ${r.ports} von ${c.ports} Anschlüssen</span></div>
-            <div class="disks">${r.disks.map((d) => `<a href="#" data-disk="${esc(d.uuid)}" class="tc">${tierBadge(d.tier)} ${esc(d.name)}${d.enclosure ? ` <span class="faint">[${esc(d.enclosure)}]</span>` : ""} <span class="faint">${d.age_days == null ? "nie" : d.age_days + " T"}</span></a>`).join("")}</div></div>`).join("")
+          ${c.phase1.rounds.length ? c.phase1.rounds.slice(0, 6).map((r, i) => `<div class="round"><div><b>Runde ${i + 1}</b> <span class="muted">· bei ${esc(r.holder)} · ${r.ports} von ${c.ports} Anschlüssen · ${fmtGb(r.cap_gb)}${r.small ? " · kleine Platten" : ""}</span></div>
+            <div class="disks">${r.disks.map((d) => `<a href="#" data-disk="${esc(d.uuid)}" class="tc">${tierBadge(d.tier)} ${esc(d.name)}${d.enclosure ? ` <span class="faint">[${esc(d.enclosure)}]</span>` : ""} <span class="faint">${d.capacity_gb ? fmtGb(d.capacity_gb) + " · " : ""}${d.age_days == null ? "nie" : d.age_days + " T"}</span></a>`).join("")}</div></div>`).join("")
             + (c.phase1.rounds.length > 6 ? `<p class="hint">+ ${c.phase1.rounds.length - 6} weitere Runden</p>` : "")
             : `<div class="muted">Alle Platten sind aktuell (≤ ${c.stale_days} Tage).</div>`}
           <p class="hint">Einfach anstecken: Der Scanner erfasst die Platte automatisch, das Dashboard aktualisiert sich innerhalb von 15 Minuten.</p>
