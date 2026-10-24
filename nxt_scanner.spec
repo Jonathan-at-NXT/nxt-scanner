@@ -33,6 +33,7 @@ a = Analysis(
         'storage_scanner.transfer',
         'storage_scanner.outbox',
         'storage_scanner.health',
+        'storage_scanner.progress',
         'storage_scanner.d1_client',
         'storage_scanner.ingest',
         'storage_scanner.ingest.camera_map',

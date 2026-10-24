@@ -346,6 +346,25 @@ export default {
     // ── Rollout-Tracking abgeschlossen (offline genommen 2026-08). ──
     // buildRollout()/ROLLOUT_HTML bleiben im Code erhalten, um es bei Bedarf
     // (neue Datenträger) mit einem Route-Eintrag wieder zu aktivieren.
+    // ── Fortschritt laufender Arbeiten (Bearer INGEST_TOKEN), nur Anzeige ──
+    if (url.pathname === "/ingest/progress" && request.method === "POST") {
+      if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+      let p;
+      try { p = await request.json(); } catch { return json({ error: "invalid json" }, 400); }
+      if (!p?.job_id || !["running", "done", "failed"].includes(p.state)) return json({ error: "invalid progress" }, 400);
+      const n = (v) => (Number.isFinite(v) ? Math.round(v) : null);
+      const t = (v, m = 200) => (v == null ? null : String(v).slice(0, m));
+      await env.DB.prepare(
+        `INSERT INTO job_progress(job_id, host, kind, disk_uuid, disk_name, started_at, updated_at, done_files, done_bytes,
+           total_files, total_bytes, state, message) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(job_id) DO UPDATE SET started_at=excluded.started_at, updated_at=excluded.updated_at,
+           done_files=excluded.done_files, done_bytes=excluded.done_bytes, total_files=excluded.total_files,
+           total_bytes=excluded.total_bytes, state=excluded.state, message=excluded.message, disk_name=excluded.disk_name`
+      ).bind(t(p.job_id, 300), t(p.host, 100), t(p.kind, 20), t(p.disk_uuid, 100), t(p.disk_name, 100), t(p.started_at, 40),
+             new Date().toISOString(), n(p.done_files), n(p.done_bytes), n(p.total_files), n(p.total_bytes), p.state, t(p.message)).run();
+      return json({ ok: true });
+    }
+
     // ── Platten-Check (Bearer INGEST_TOKEN): letzter Zustand je Datenträger ──
     if (url.pathname === "/ingest/health" && request.method === "POST") {
       if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);

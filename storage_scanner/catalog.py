@@ -258,6 +258,12 @@ def inventory(mount: str, conn: sqlite3.Connection, vol: dict | None = None,
     seen = set()
     errors: list = []
     stats = {"files": 0, "bytes": 0, "added": 0, "changed": 0, "removed": 0}
+    # Fortschritt ans Dashboard: Erwartung = letzte Inventur dieser Kennung (falls vorhanden)
+    from .progress import Reporter
+    prev = conn.execute("SELECT files, bytes FROM run WHERE volume_uuid=? AND kind='inventory' ORDER BY complete DESC, id DESC LIMIT 1",
+                        (uuid,)).fetchone()
+    rep = Reporter("inventur", uuid, vol["name"], total_files=prev[0] if prev else (len(existing) or None),
+                   total_bytes=prev[1] if prev else None)
     batch_new, batch_upd, batch_touch = [], [], []
     now = started
 
@@ -296,6 +302,7 @@ def inventory(mount: str, conn: sqlite3.Connection, vol: dict | None = None,
             batch_touch.append((now, uuid, rel))
         if len(batch_new) + len(batch_upd) + len(batch_touch) >= 5000:
             flush()
+            rep.update(stats["files"], stats["bytes"])
     flush()
 
     # Nicht lesbare Ordner: Dateien darunter NICHT als verschwunden werten,
@@ -328,6 +335,7 @@ def inventory(mount: str, conn: sqlite3.Connection, vol: dict | None = None,
         with conn:
             conn.executemany("INSERT INTO run_error(run_started, volume_uuid, path, message) VALUES(?,?,?,?)",
                              [(started, uuid, p, m[:300]) for p, m in errors])
+    rep.finish(stats["files"], stats["bytes"], ok=complete, message=None if complete else f"{len(errors)} Fehler")
     for path, msg in errors[:20]:
         _log.warning("Inventur-Fehler %s: %s", path, msg)
     if len(errors) > 20:

@@ -241,6 +241,15 @@ export default {
       if (url.pathname === "/app.js") return respond(APP_JS, "text/javascript; charset=utf-8");
       if (url.pathname === "/outfit.woff2") return respond(FONT, "font/woff2", 200, { "cache-control": "public, max-age=604800" });
       if (url.pathname === "/api/state") return json({ me: user.email, ...(await loadState(env)) });
+      if (url.pathname === "/api/progress") {
+        // laufend (Meldung < 3 min alt) oder in der letzten Stunde beendet
+        const rows = (await env.DB.prepare(
+          `SELECT * FROM job_progress WHERE (state='running' AND updated_at >= datetime('now','-3 minutes'))
+             OR (state<>'running' AND updated_at >= datetime('now','-60 minutes')) ORDER BY state='running' DESC, updated_at DESC`).all()).results || [];
+        const stale = (await env.DB.prepare(
+          "SELECT * FROM job_progress WHERE state='running' AND updated_at < datetime('now','-3 minutes') AND updated_at >= datetime('now','-2 hours')").all()).results || [];
+        return json({ jobs: rows, stalled: stale });
+      }
       if (url.pathname === "/api/audit") {
         const rows = (await env.DB.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 300").all()).results || [];
         return json({ rows });

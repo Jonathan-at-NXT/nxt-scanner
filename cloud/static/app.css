@@ -211,3 +211,13 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); }
   background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
 .triage td .row { flex-wrap: nowrap; }
 .triage input[type=checkbox] { accent-color: #fff; width: 16px; height: 16px; }
+
+/* ── Laufende Arbeiten ─────────────────────────── */
+.jobs { max-width: 1320px; margin: 14px auto 0; padding: 0 20px; display: grid; gap: 8px; }
+.job { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.job .top { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; justify-content: space-between; font-size: 13.5px; }
+.job .bar { height: 8px; background: var(--panel-3); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+.job .bar span { display: block; height: 100%; background: var(--ok); transition: width .6s ease; }
+.job .bar.indet span { width: 30% !important; animation: indet 1.4s ease-in-out infinite; }
+@keyframes indet { 0% { transform: translateX(-100%) } 100% { transform: translateX(340%) } }
+.job.done { opacity: .6 } .job.failed .bar span { background: var(--crit); }
