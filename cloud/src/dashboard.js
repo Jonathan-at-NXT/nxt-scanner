@@ -244,11 +244,12 @@ export default {
       if (url.pathname === "/api/progress") {
         // laufend (Meldung < 3 min alt) oder in der letzten Stunde beendet
         const rows = (await env.DB.prepare(
-          `SELECT * FROM job_progress WHERE (state='running' AND updated_at >= datetime('now','-3 minutes'))
-             OR (state<>'running' AND updated_at >= datetime('now','-5 minutes')) ORDER BY state='running' DESC, updated_at DESC`).all()).results || [];
-        // hängengebliebene Jobs nur 30 min zeigen (danach gelten sie als abgebrochen)
+          `SELECT * FROM job_progress WHERE (state='running' AND julianday(updated_at) >= julianday('now','-3 minutes'))
+             OR (state<>'running' AND julianday(updated_at) >= julianday('now','-5 minutes')) ORDER BY state='running' DESC, updated_at DESC`).all()).results || [];
+        // hängengebliebene Jobs nur 30 min zeigen (danach gelten sie als abgebrochen).
+        // julianday() statt Textvergleich: updated_at ist ISO mit "T"/"Z", datetime('now') nicht.
         const stale = (await env.DB.prepare(
-          "SELECT * FROM job_progress WHERE state='running' AND updated_at < datetime('now','-3 minutes') AND updated_at >= datetime('now','-30 minutes')").all()).results || [];
+          "SELECT * FROM job_progress WHERE state='running' AND julianday(updated_at) < julianday('now','-3 minutes') AND julianday(updated_at) >= julianday('now','-30 minutes')").all()).results || [];
         return json({ jobs: rows, stalled: stale });
       }
       if (url.pathname === "/api/audit") {
