@@ -95,6 +95,32 @@ function dateClose(d1, d2, days = 2) {
 }
 
 /** Setzt cluster_id (nur validierte). Gleiche Regeln wie derive.assign_clusters. */
+const stripYear = (p) => {
+  const y = (p.date || "").slice(0, 4);
+  return y ? p.norm_name.replace(new RegExp(`\\s${y}$`), "") : p.norm_name;
+};
+
+/** Ganzer Projektordner (Typ PROJECT) mit gültigen Typ-Unterordnern (…_FOOTAGE, …_PHOTOS):
+ *  statt des Wrappers zählen die Unterordner, damit Kopien gleichen Typs zusammenfinden. */
+export function expandProjectWrappers(top, children, classifyFn) {
+  const byParent = new Map();
+  for (const c of children) {
+    const k = `${c.disk_uuid}|${c.parent_rel_path}`;
+    if (!byParent.has(k)) byParent.set(k, []);
+    byParent.get(k).push(c);
+  }
+  const out = [];
+  for (const p of top) {
+    if (p.status === "validated" && p.type === "PROJECT") {
+      const kids = (byParent.get(`${p.disk_uuid}|${p.rel_path}`) || []).map(classifyFn)
+        .filter((k) => k.status === "validated" && k.type && k.type !== "PROJECT");
+      if (kids.length) { out.push(...kids); continue; }
+    }
+    out.push(p);
+  }
+  return out;
+}
+
 export function assignClusters(projects) {
   const idx = projects.map((p, i) => (p.status === "validated" ? i : -1)).filter((i) => i >= 0);
   const parent = new Map(idx.map((i) => [i, i]));
@@ -112,7 +138,8 @@ export function assignClusters(projects) {
     for (const j of buckets.get(pi.norm_name.slice(0, 3)) || []) {
       if (j <= i) continue;
       const pj = projects[j];
-      const a = pi.norm_name, b = pj.norm_name;
+      // Jahreszahl am Ende, die zum Drehdatum passt, zählt nicht ("MACHERFESTIVAL 2025" = "MACHERFESTIVAL")
+      const a = stripYear(pi), b = stripYear(pj);
       if (!a || !b) continue;
       const sameDate = pi.date === pj.date;
       let same = (sameDate && a === b) || (a === b && dateClose(pi.date, pj.date));
@@ -137,9 +164,12 @@ export function assignClusters(projects) {
 export async function runDerive(env) {
   const nodes = (await env.DB.prepare(
     "SELECT disk_uuid, rel_path, size_bytes, file_count, mtime FROM folder_tree WHERE depth=1 ORDER BY disk_uuid, rel_path").all()).results || [];
+  const children = (await env.DB.prepare(
+    "SELECT disk_uuid, rel_path, parent_rel_path, size_bytes, file_count, mtime FROM folder_tree WHERE depth=2").all()).results || [];
   const overrides = new Map(((await env.DB.prepare("SELECT disk_uuid, rel_path, soll_name FROM folder_override").all()).results || [])
     .map((o) => [`${o.disk_uuid}|${o.rel_path}`, o.soll_name]));
-  const projects = assignClusters(nodes.map((n) => classify(n, overrides.get(`${n.disk_uuid}|${n.rel_path}`))));
+  const cls = (n) => classify(n, overrides.get(`${n.disk_uuid}|${n.rel_path}`));
+  const projects = assignClusters(expandProjectWrappers(nodes.map(cls), children, cls));
   const disks = (await env.DB.prepare("SELECT uuid, used_bytes, last_scan FROM disks").all()).results || [];
   const counts = (await env.DB.prepare("SELECT disk_uuid, COUNT(*) n FROM folder_tree GROUP BY disk_uuid").all()).results || [];
   const nodeCount = new Map(counts.map((r) => [r.disk_uuid, r.n]));
@@ -163,11 +193,14 @@ export async function runDerive(env) {
 }
 
 /** Nur neu ableiten, wenn sich Scans oder Soll-Namen geändert haben (spart D1-Schreibzugriffe). */
+// Bei Änderungen an der Zuordnungslogik hochzählen → nächster Lauf leitet neu ab
+const DERIVE_VERSION = "2026-10-24b";
+
 export async function deriveIfChanged(env) {
   const r = await env.DB.prepare(
     `SELECT (SELECT COALESCE(MAX(last_scan),'') || ':' || COUNT(*) FROM disks) || '/' ||
             (SELECT COALESCE(MAX(updated_at),'') || ':' || COUNT(*) FROM folder_override) AS stamp`).first();
-  const stamp = r?.stamp || "";
+  const stamp = `${DERIVE_VERSION}#${r?.stamp || ""}`;
   const prev = await env.DB.prepare("SELECT value FROM meta WHERE key='derive_stamp'").first();
   if (prev?.value === stamp) return { skipped: true };
   const res = await runDerive(env);

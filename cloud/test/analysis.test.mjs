@@ -52,3 +52,14 @@ test("Sollstand: kleinere Kopie als Referenz, Mehrmaterial wird frei", () => {
   assert.equal(t.size_gb, 1720);
   assert.equal(a.findings.find((x) => x.type === "REF_EXTRA").savings_gb, 1970);
 });
+
+test("WORKING nur 1× macht ein Projekt nicht unsicher, FOOTAGE entscheidet", () => {
+  const w = (d, gb) => ({ ...proj(d, "2026-04-15_DÖRR ROADSHOW_WORKING", gb), type: "WORKING" });
+  const a = analyze({
+    disks: [disk("A", "VB02"), disk("B", "TOWER 10")],
+    projects: [proj("A", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 260), proj("B", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 259), w("A", 50)],
+  });
+  assert.equal(a.projects[0].level, "ok");
+  assert.equal(a.projects[0].missing_gb, 0);
+  assert.ok(!a.findings.some((f) => f.type === "MISSING_BACKUP"));
+});

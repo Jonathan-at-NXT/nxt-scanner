@@ -142,12 +142,14 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       const sizes = disksOf.map((u) => Math.round(perDisk.get(u) * 100) / 100);
       const maxGb = Math.round(refGb * 100) / 100;
       sizeGb += maxGb;
-      minCopies = Math.min(minCopies, disksOf.length);
       types.push({ type: t, copies, disks: disksOf.length, size_gb: maxGb, partial: partialDisks.length, ref,
                    mismatch: disksOf.length >= 2 && new Set(sizes).size > 1 });
 
       const label = `${members[0].date} ${members[0].project_name}`;
-      if (disksOf.length < min) {
+      const core = CORE_TYPES.has(t) || ![...byType.keys()].some((x) => CORE_TYPES.has(x));
+      if (core) minCopies = Math.min(minCopies, disksOf.length);
+      types[types.length - 1].core = core;
+      if (disksOf.length < min && core) {
         add({ key: `MISSING_BACKUP|${cid}|${t}`, type: "MISSING_BACKUP", cluster: cid, project: label, folder_type: t,
               disks: disksOf, size_gb: maxGb,
               details: (disksOf.length ? `Vollständig nur auf ${disksOf.map((u) => disk.get(u)?.name || "?").join(", ")} (${fg(maxGb)}), Soll: ${min}×`
@@ -183,7 +185,7 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
     }
 
     // Unvollständige Kopie: eine Platte hat das Projekt, aber nicht alle Ordnertypen
-    const allTypes = new Set(byType.keys());
+    const allTypes = new Set(types.filter((x) => x.core).map((x) => x.type));
     if (min >= 2 && allTypes.size > 1) {
       const typesOnDisk = new Map();
       for (const m of members) {
@@ -220,9 +222,9 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
     }
 
     const copiesOverall = minCopies === Infinity ? 0 : minCopies;
-    const maxCopies = Math.max(0, ...types.map((t) => t.disks));
-    // Fehlender Teil: nur Ordnertypen unter der Regel zählen (nicht das ganze Projekt)
-    const missingGb = Math.round(types.filter((t) => t.disks < min).reduce((s, t) => s + t.size_gb, 0) * 100) / 100;
+    const maxCopies = Math.max(0, ...types.filter((t) => t.core).map((t) => t.disks));
+    // Fehlender Teil: nur Rohmaterial-Typen unter der Regel zählen (WORKING etc. eigens als "soft")
+    const missingGb = Math.round(types.filter((t) => t.core && t.disks < min).reduce((s, t) => s + t.size_gb, 0) * 100) / 100;
     // Sicherungsstand: einfach = kein Teil hat eine zweite Kopie, teilweise = gemischt
     const level = min <= 1 ? (copiesOverall >= min ? "ok" : "einfach")
       : copiesOverall >= min ? (copiesOverall >= 3 ? "mehrfach" : "ok")
@@ -322,6 +324,9 @@ function overview(projects, disks, findings) {
 // ── Aufräum-Plan ──────────────────────────────────────────────────
 // Eine Kopie zählt nur, wenn sie mind. 95 % der vollständigsten Kopie hat (sonst "teilweise").
 export const FULL_COPY_RATIO = 0.95;
+// Gesichert = Rohmaterial (FOOTAGE/PHOTOS; PROJECT = nicht aufgelöster Gesamtordner) erfüllt die Regel.
+// WORKING/PROXIES/BTS: sollten mit, entscheiden aber nicht über "gesichert".
+export const CORE_TYPES = new Set(["FOOTAGE", "PHOTOS", "PROJECT"]);
 const SMALL_COPY_GB = 1;             // darunter (leere/winzige Ordner) zählt jede Kopie
 export const STALE_DAYS = 60;        // älter = für den Überblick neu scannen
 // Phase 1 = einmal alles mit dem neuen Scanner (Datei-Katalog) erfassen: alles davor gilt als offen

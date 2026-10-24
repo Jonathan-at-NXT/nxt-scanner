@@ -34,3 +34,15 @@ test("Soll-Name ordnet unbenannten Ordner einem Projekt zu", () => {
   assert.equal(p.soll_name, "2026-08-06_MACHERFESTIVAL_FOOTAGE");
   assert.equal(p.name, "PAULA");
 });
+
+test("Projekt-Wrapper wird in Typ-Unterordner aufgelöst, Jahreszahl im Namen stört nicht", async () => {
+  const { expandProjectWrappers } = await import("../src/derive.js");
+  const top = [classify({ disk_uuid: "NAS", rel_path: "2025-08-07_MACHERFESTIVAL 2025", size_bytes: 3923 }),
+               classify({ disk_uuid: "NH2", rel_path: "2025-08-07_MACHERFESTIVAL_FOOTAGE", size_bytes: 3918 })];
+  const kids = [{ disk_uuid: "NAS", parent_rel_path: "2025-08-07_MACHERFESTIVAL 2025",
+                  rel_path: "2025-08-07_MACHERFESTIVAL 2025/2025-08-07_MACHERFESTIVAL 2025_FOOTAGE", size_bytes: 3918 }];
+  const ps = assignClusters(expandProjectWrappers(top, kids, (n) => classify(n)));
+  assert.equal(ps.length, 2);
+  assert.ok(ps.every((p) => p.type === "FOOTAGE"));
+  assert.equal(ps[0].cluster_id, ps[1].cluster_id);
+});
