@@ -120,38 +120,46 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
     const types = [];
     let minCopies = Infinity, sizeGb = 0;
     for (const [t, rows] of [...byType].sort()) {
-      const disksOf = [...new Set(rows.map((r) => r.disk_uuid))];
+      // Volle Kopie = Platte hat (Summe ihrer Ordner dieses Typs) >= FULL_COPY_RATIO der vollständigsten Platte.
+      // Tages-Teilkopien (z. B. SSD mit nur einem Drehtag) zählen nicht als Kopie, sondern als "teilweise".
+      const perDisk = new Map();
+      for (const r of rows) perDisk.set(r.disk_uuid, (perDisk.get(r.disk_uuid) || 0) + gb(r.size_bytes));
+      const fullest = Math.max(0, ...perDisk.values());
+      const isFull = (u) => fullest < SMALL_COPY_GB || perDisk.get(u) >= fullest * FULL_COPY_RATIO;
+      const disksOf = [...perDisk.keys()].filter(isFull);
+      const partialDisks = [...perDisk.keys()].filter((u) => !isFull(u));
       const copies = rows.map((r) => ({
         disk_uuid: r.disk_uuid, disk: disk.get(r.disk_uuid)?.name || "?", tier: disk.get(r.disk_uuid)?.tier || null,
         holder: disk.get(r.disk_uuid)?.holder || null, last_scan: disk.get(r.disk_uuid)?.last_scan || null,
         rel_path: r.rel_path, name: r.name, soll_name: r.soll_name || null,
-        size_gb: gb(r.size_bytes), files: r.file_count,
-      })).sort((a, b) => a.disk.localeCompare(b.disk, "de", { numeric: true }));
-      const sizes = copies.map((c) => c.size_gb);
-      const maxGb = Math.max(...sizes);
+        size_gb: gb(r.size_bytes), files: r.file_count, full: isFull(r.disk_uuid),
+      })).sort((a, b) => (b.full - a.full) || a.disk.localeCompare(b.disk, "de", { numeric: true }));
+      const sizes = disksOf.map((u) => Math.round(perDisk.get(u) * 100) / 100);
+      const maxGb = Math.round(fullest * 100) / 100;
       sizeGb += maxGb;
       minCopies = Math.min(minCopies, disksOf.length);
-      types.push({ type: t, copies, disks: disksOf.length, size_gb: maxGb,
+      types.push({ type: t, copies, disks: disksOf.length, size_gb: maxGb, partial: partialDisks.length,
                    mismatch: disksOf.length >= 2 && new Set(sizes).size > 1 });
 
       const label = `${members[0].date} ${members[0].project_name}`;
       if (disksOf.length < min) {
         add({ key: `MISSING_BACKUP|${cid}|${t}`, type: "MISSING_BACKUP", cluster: cid, project: label, folder_type: t,
               disks: disksOf, size_gb: maxGb,
-              details: disksOf.length ? `Nur auf ${copies.map((c) => c.disk).join(", ")} (${fg(maxGb)}), Soll: ${min}×`
-                                      : `Keine Kopie, Soll: ${min}×` });
+              details: (disksOf.length ? `Vollständig nur auf ${disksOf.map((u) => disk.get(u)?.name || "?").join(", ")} (${fg(maxGb)}), Soll: ${min}×`
+                                       : `Keine vollständige Kopie, Soll: ${min}×`) +
+                       (partialDisks.length ? ` · Teilkopien: ${partialDisks.map((u) => `${disk.get(u)?.name || "?"} (${fg(perDisk.get(u))})`).join(", ")}` : "") });
       }
       if (disksOf.length >= 2 && new Set(sizes).size > 1) {
         const diff = Math.round((Math.max(...sizes) - Math.min(...sizes)) * 100) / 100;
         add({ key: `SIZE_MISMATCH|${cid}|${t}`, type: "SIZE_MISMATCH", cluster: cid, project: label, folder_type: t,
               disks: disksOf, diff_gb: diff, size_gb: maxGb,
-              details: copies.map((c) => `${c.disk}: ${fg(c.size_gb)}`).join(" vs ") + ` (Differenz ${fg(diff)})` });
+              details: disksOf.map((u) => `${disk.get(u)?.name || "?"}: ${fg(perDisk.get(u))}`).join(" vs ") + ` (Differenz ${fg(diff)})` });
       }
       if (disksOf.length > Math.max(min, 2)) {
         const extra = disksOf.length - Math.max(min, 2);
         add({ key: `EXCESS_COPIES|${cid}|${t}`, type: "EXCESS_COPIES", cluster: cid, project: label, folder_type: t,
               disks: disksOf, size_gb: maxGb, savings_gb: Math.round(maxGb * extra * 100) / 100,
-              details: `${disksOf.length} Kopien (Soll ${Math.max(min, 2)}): ` + copies.map((c) => `${c.disk} (${fg(c.size_gb)})`).join(", ") });
+              details: `${disksOf.length} vollständige Kopien (Soll ${Math.max(min, 2)}): ` + disksOf.map((u) => `${disk.get(u)?.name || "?"} (${fg(perDisk.get(u))})`).join(", ") });
       }
     }
 
@@ -221,7 +229,7 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
     if (!p.ok) for (const u of onDisks) { const d = disk.get(u); if (d) d.bad_projects++; }
     const onlyHere = new Map();
     for (const t of p.types) if (t.disks === 1) {
-      const u = t.copies[0].disk_uuid;
+      const u = t.copies.find((c) => c.full).disk_uuid;
       onlyHere.set(u, (onlyHere.get(u) || 0) + t.size_gb);
     }
     for (const [u, g] of onlyHere) { const d = disk.get(u); if (d) { d.only_here++; d.only_here_gb = Math.round((d.only_here_gb + g) * 100) / 100; } }
@@ -293,6 +301,9 @@ function overview(projects, disks, findings) {
 
 
 // ── Aufräum-Plan ──────────────────────────────────────────────────
+// Eine Kopie zählt nur, wenn sie mind. 95 % der vollständigsten Kopie hat (sonst "teilweise").
+export const FULL_COPY_RATIO = 0.95;
+const SMALL_COPY_GB = 1;             // darunter (leere/winzige Ordner) zählt jede Kopie
 export const STALE_DAYS = 60;        // älter = für den Überblick neu scannen
 // Phase 1 = einmal alles mit dem neuen Scanner (Datei-Katalog) erfassen: alles davor gilt als offen
 export const PHASE1_SINCE = "2026-10-22T00:00:00+02:00";
