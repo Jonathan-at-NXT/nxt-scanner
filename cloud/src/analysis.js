@@ -76,7 +76,7 @@ export function buildDisks(disks, metaRows, projects, healthRows = []) {
 }
 
 /** Projekte je Cluster inkl. Regel, Kopien je Typ, Befunde. */
-export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [] }) {
+export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS }) {
   const diskList = buildDisks(disks, diskMeta, projects, health);
   const disk = new Map(diskList.map((d) => [d.uuid, d]));
   const ruleBy = new Map(rules.map((r) => [r.rule_key, r]));
@@ -205,7 +205,7 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       tiers: [...tiersPresent].sort(),
       copies: copiesOverall, copies_max: maxCopies, level, missing_gb: missingGb,
       sicherung, sicherung_min: min, require_tiers: requireTiers,
-      rule_note: rule?.note || null, rule_by: rule?.updated_by || null,
+      rule_note: rule?.note || null, rule_by: rule?.updated_by || null, decided: !!rule,
       ok: copiesOverall >= min && requireTiers.every((t) => tiersPresent.has(t)),
     });
   }
@@ -246,7 +246,8 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
   }
 
   out.sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.name.localeCompare(b.name));
-  return { projects: out, disks: diskList, findings, overview: overview(out, diskList, findings) };
+  return { projects: out, disks: diskList, findings, overview: overview(out, diskList, findings),
+           cleanup: cleanupPlan(out, diskList, findings, Date.now(), reserveMonths) };
 }
 
 function overview(projects, disks, findings) {
@@ -285,3 +286,117 @@ function overview(projects, disks, findings) {
                      missing_types: p.types.filter((t) => t.disks < p.sicherung_min).map((t) => t.type) })),
   };
 }
+
+
+// ── Aufräum-Plan ──────────────────────────────────────────────────
+export const STALE_DAYS = 60;        // älter = für den Überblick neu scannen
+const MARGIN = 0.05;                 // Ziele nie über 95 % füllen
+const PORTS = 4;                     // so viele Platten gleichzeitig anschließen
+export const DEFAULT_RESERVE_MONTHS = 3;   // Platz für neue Drehs, die in dieser Zeit dazukommen (einstellbar)
+
+/**
+ * Plan in 4 Phasen, live aus den Daten:
+ * 1 Überblick: jede Platte (und das NAS) aktuell gescannt
+ * 2 Entscheiden: Projekte, die ihre Regel nicht erfüllen und noch keine Entscheidung haben
+ * 3 Vervollständigen: Kopieraufgaben (nur entschiedene 2×/3×-Projekte), gebündelt in Anschluss-Runden
+ * 4 Freigeben: Platz aus überzähligen Kopien und "Löschbar"-Projekten
+ */
+export function cleanupPlan(projects, disks, findings, now = Date.now(), reserveMonths = DEFAULT_RESERVE_MONTHS) {
+  const real = disks.filter((d) => !d.fallback && !d.stale);
+  const ageDays = (d) => (d.last_scan ? (now - Date.parse(d.last_scan)) / 86400000 : Infinity);
+
+  // Phase 1: Überblick
+  const toScan = real.filter((d) => ageDays(d) > STALE_DAYS).sort((a, b) => ageDays(b) - ageDays(a));
+  const hasNas = real.some((d) => d.tier === "NAS");
+  const byHolder = new Map();
+  for (const d of toScan) {
+    const h = d.holder || "unbekannt";
+    if (!byHolder.has(h)) byHolder.set(h, []);
+    byHolder.get(h).push(d);
+  }
+  // Runden: je Halter:in gebündelt, max. PORTS Platten gleichzeitig
+  const scanRounds = [];
+  for (const [holder, ds] of [...byHolder].sort((a, b) => b[1].length - a[1].length)) {
+    for (let i = 0; i < ds.length; i += PORTS) {
+      scanRounds.push({ holder, disks: ds.slice(i, i + PORTS).map((d) => ({ uuid: d.uuid, name: d.name, tier: d.tier,
+        last_scan: d.last_scan, age_days: Number.isFinite(ageDays(d)) ? Math.round(ageDays(d)) : null })) });
+    }
+  }
+  const phase1 = { total: real.length + (hasNas ? 0 : 1), fresh: real.length - toScan.length,
+                   nas_missing: !hasNas, rounds: scanRounds };
+
+  // Phase 2: Entscheiden
+  const open = projects.filter((p) => !p.ok && !p.decided);
+  const phase2 = { open: open.length, open_gb: round(open.reduce((s, p) => s + p.size_gb, 0)),
+                   decided: projects.filter((p) => p.decided).length };
+
+  // Phase 3: Kopieraufgaben (nur bewusst entschiedene Projekte mit >= 2 Kopien)
+  const free = new Map(real.filter((d) => d.capacity_gb && d.free_gb != null)
+    .map((d) => [d.uuid, Math.max(0, d.free_gb - d.capacity_gb * MARGIN)]));
+  const targetsPref = real.filter((d) => free.has(d.uuid) && ["HDD", "NAS"].includes(d.tier));
+  const tasks = [];
+  for (const p of projects) {
+    if (!p.decided || p.ok || p.sicherung_min < 2) continue;
+    for (const t of p.types) {
+      if (t.disks >= p.sicherung_min || !t.copies.length) continue;
+      tasks.push({ project: p.id, name: `${p.date} ${p.name}`, type: t.type, gb: t.size_gb,
+                   source: t.copies[0].disk_uuid, source_name: t.copies[0].disk,
+                   has: new Set(t.copies.map((c) => c.disk_uuid)), need: p.sicherung_min - t.disks });
+    }
+  }
+  // Je Quellplatte eine Runde; Ziele mit dem meisten Platz zuerst, Platz wird reserviert
+  const bySource = new Map();
+  for (const t of tasks) { if (!bySource.has(t.source)) bySource.set(t.source, []); bySource.get(t.source).push(t); }
+  const copyRounds = [];
+  let unplacedGb = 0;
+  for (const [src, ts] of [...bySource].sort((a, b) => sum(b[1]) - sum(a[1]))) {
+    const assign = new Map();
+    for (const t of ts.sort((a, b) => b.gb - a.gb)) {
+      for (let k = 0; k < t.need; k++) {
+        const cand = targetsPref.filter((d) => d.uuid !== src && !t.has.has(d.uuid) && free.get(d.uuid) >= t.gb)
+          .sort((a, b) => (assign.has(b.uuid) - assign.has(a.uuid)) || free.get(b.uuid) - free.get(a.uuid))[0];
+        if (!cand) { unplacedGb += t.gb; continue; }
+        free.set(cand.uuid, free.get(cand.uuid) - t.gb);
+        t.has.add(cand.uuid);
+        if (!assign.has(cand.uuid)) assign.set(cand.uuid, []);
+        assign.get(cand.uuid).push({ name: t.name, type: t.type, gb: t.gb, project: t.project });
+      }
+    }
+    if (assign.size) copyRounds.push({ source: { uuid: src, name: ts[0].source_name },
+      targets: [...assign].map(([u, items]) => ({ uuid: u, name: real.find((d) => d.uuid === u)?.name || u,
+        gb: round(items.reduce((s, i) => s + i.gb, 0)), items })),
+      gb: round([...assign.values()].flat().reduce((s, i) => s + i.gb, 0)) });
+  }
+  const phase3 = { tasks: tasks.length, gb: round(tasks.reduce((s, t) => s + t.gb * t.need, 0)),
+                   rounds: copyRounds, unplaced_gb: round(unplacedGb) };
+
+  // Phase 4: Freigeben
+  const excessGb = findings.filter((f) => f.type === "EXCESS_COPIES" && f.status === "offen").reduce((s, f) => s + (f.savings_gb || 0), 0);
+  const deletable = projects.filter((p) => p.sicherung === "loeschbar");
+  const deletableGb = deletable.reduce((s, p) => s + p.types.reduce((x, t) => x + t.copies.reduce((y, c) => y + c.size_gb, 0), 0), 0);
+  const singleExtraGb = projects.filter((p) => p.sicherung === "einfach")
+    .reduce((s, p) => s + p.types.reduce((x, t) => x + Math.max(0, t.disks - 1) * t.size_gb, 0), 0);
+  const phase4 = { excess_gb: round(excessGb), deletable_gb: round(deletableGb), single_extra_gb: round(singleExtraGb),
+                   total_gb: round(excessGb + deletableGb + singleExtraGb), deletable_projects: deletable.length };
+
+  // Platzbilanz (Ziel-Platz auf HDD/NAS ohne 5 % Reserve)
+  const freeHdd = real.filter((d) => ["HDD", "NAS"].includes(d.tier) && d.free_gb != null)
+    .reduce((s, d) => s + Math.max(0, d.free_gb - (d.capacity_gb || 0) * MARGIN), 0);
+  const needAll = projects.filter((p) => !p.ok && p.sicherung_min >= 2).reduce((s, p) => s + (p.missing_gb || 0), 0);
+  // Reserve für neue Drehs: Zuwachs der letzten 6 Monate (nach Projektdatum) × RESERVE_MONTHS, doppelt gesichert
+  const since = now - 182 * 86400000;
+  const recentGb = projects.filter((p) => p.date && Date.parse(p.date + "T00:00:00Z") >= since && Date.parse(p.date + "T00:00:00Z") <= now)
+    .reduce((s, p) => s + p.size_gb, 0);
+  const perMonth = recentGb / 6;
+  const reserveGb = perMonth * reserveMonths * 2;
+  const targetGb = needAll + reserveGb;
+  const balance = { need_gb: round(needAll), need_decided_gb: phase3.gb, free_gb: round(freeHdd), freeable_gb: phase4.total_gb,
+                    intake_gb_month: round(perMonth), reserve_months: reserveMonths, reserve_gb: round(reserveGb),
+                    target_gb: round(targetGb),
+                    shortfall_gb: round(Math.max(0, targetGb - freeHdd - phase4.total_gb)) };
+
+  const phase = phase1.fresh < phase1.total ? 1 : phase2.open ? 2 : phase3.tasks ? 3 : phase4.total_gb > 0 ? 4 : 5;
+  return { phase, phase1, phase2, phase3, phase4, balance, stale_days: STALE_DAYS, ports: PORTS };
+}
+const round = (g) => Math.round(g * 100) / 100;
+const sum = (ts) => ts.reduce((s, t) => s + t.gb, 0);

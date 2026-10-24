@@ -38,7 +38,7 @@
     const st = sortState[table], on = st.key === key;
     return `<th class="sortable ${cls} ${on ? "on" : ""}" data-sort="${table}:${key}" aria-sort="${on ? (st.dir > 0 ? "ascending" : "descending") : "none"}">${label}${on ? (st.dir > 0 ? " ↑" : " ↓") : ""}</th>`;
   };
-  let ui = { proj: { filter: "alle", limit: 150 }, disk: { tier: "alle" }, find: { prio: "kritisch", status: "offen", type: "" }, assign: { limit: 100 } };
+  let ui = { clean: { age: "alt3", limit: 120, sel: new Set() }, proj: { filter: "alle", limit: 150 }, disk: { tier: "alle" }, find: { prio: "kritisch", status: "offen", type: "" }, assign: { limit: 100 } };
 
   // ── Daten ──────────────────────────────────────
   async function load() {
@@ -89,6 +89,84 @@
 
   // ── Seiten ─────────────────────────────────────
   const pages = {
+    aufraeumen() {
+      const c = S.cleanup, b = c.balance;
+      const step = (n, t, sub) => `<div class="step ${c.phase === n ? "now" : c.phase > n ? "done" : ""}"><div class="n">Phase ${n}</div><div class="t">${t}</div><div class="s">${sub}</div></div>`;
+      const ageYears = (p) => (Date.now() - Date.parse(p.date + "T00:00:00Z")) / (365.25 * 86400000);
+      const ageF = { alle: () => true, alt3: (p) => ageYears(p) >= 3, mittel: (p) => ageYears(p) >= 1 && ageYears(p) < 3, neu: (p) => ageYears(p) < 1 };
+      const s = q();
+      const triageAll = S.projects.filter((p) => !p.ok && !p.decided && matchProject(p, s));
+      const triage = triageAll.filter(ageF[ui.clean.age]).sort((a, b) => b.size_gb - a.size_gb);
+      const nAge = (k) => triageAll.filter(ageF[k]).length;
+      const sel = ui.clean.sel;
+      return `
+      <div class="head"><div><h1>Aufräumen</h1><p>Erst Überblick, dann entscheiden, dann vervollständigen, dann Platz freigeben. Der Plan rechnet nach jedem Scan und jeder Entscheidung neu.</p></div></div>
+      <div class="steps">
+        ${step(1, "Überblick", `${fmtN(c.phase1.fresh)} / ${fmtN(c.phase1.total)} Platten aktuell${c.phase1.nas_missing ? " · NAS fehlt" : ""}`)}
+        ${step(2, "Entscheiden", `${fmtN(c.phase2.open)} Projekte offen · ${fmtGb(c.phase2.open_gb)}`)}
+        ${step(3, "Vervollständigen", `${fmtN(c.phase3.tasks)} Aufgaben · ${fmtGb(c.phase3.gb)}`)}
+        ${step(4, "Freigeben", `${fmtGb(c.phase4.total_gb)} möglich`)}
+      </div>
+
+      <div class="panel"><h3>Ziel</h3>
+        <div class="row" style="justify-content:space-between;align-items:flex-end">
+          <div><div class="kpi"><div class="value num">${b.shortfall_gb ? fmtGb(b.shortfall_gb) : "Ziel erreicht"}</div></div>
+            <div class="sub">${b.shortfall_gb ? "fehlen noch, um alles nach Regel zu sichern und Platz für " + b.reserve_months + " Monate neue Drehs zu haben" : "Alles nach Regel gesichert, Reserve vorhanden"}</div></div>
+          <div class="r"><div class="num" style="font-size:26px;font-weight:600">${Math.round(c.goal.progress * 100)} %</div>
+            <div class="sub">${fmtGb(c.goal.closed_gb)} von ${fmtGb(c.goal.baseline.shortfall_gb)} geschafft · Start ${new Date(c.goal.baseline.at).toLocaleDateString("de-DE")}</div></div>
+        </div>
+        <div class="stack" style="height:12px;margin-top:12px"><span class="c2" style="width:${c.goal.progress * 100}%"></span></div>
+        <p class="hint">Gesamtbedarf ${fmtGb(b.target_gb)} = fehlende 2. Kopien ${fmtGb(b.need_gb)} + Reserve ${fmtGb(b.reserve_gb)}
+          (≈ ${fmtGb(b.intake_gb_month)} neue Drehs pro Monat × ${b.reserve_months} Monate × 2 Kopien) · gedeckt durch freien Platz ${fmtGb(b.free_gb)} und frei werdenden ${fmtGb(b.freeable_gb)}.
+          <a href="#" data-reset-goal>Ziel neu setzen</a> (z. B. nach einem Plattenkauf).
+          · Reserve: <select id="reserve" style="width:auto;padding:2px 6px">${[0, 1, 3, 6].map((m) => `<option value="${m}" ${b.reserve_months === m ? "selected" : ""}>${m} Monate</option>`).join("")}</select></p>
+      </div>
+      <div class="panel section"><h3>Platzbilanz</h3><div class="balance">
+        <div class="kpi"><div class="label">Fehlt als 2. Kopie</div><div class="value num" style="color:var(--crit)">${fmtGb(b.need_gb)}</div><div class="sub">davon entschieden ${fmtGb(b.need_decided_gb)}</div></div>
+        <div class="kpi"><div class="label">Frei auf HDD/NAS</div><div class="value num">${fmtGb(b.free_gb)}</div><div class="sub">ohne 5 % Reserve je Platte</div></div>
+        <div class="kpi"><div class="label">Wird frei</div><div class="value num" style="color:var(--ok)">${fmtGb(b.freeable_gb)}</div><div class="sub">zu viele Kopien ${fmtGb(c.phase4.excess_gb)} · Löschbar ${fmtGb(c.phase4.deletable_gb)} · 1×-Regel ${fmtGb(c.phase4.single_extra_gb)}</div></div>
+        <div class="kpi"><div class="label">Lücke</div><div class="value num" style="color:${b.shortfall_gb ? "var(--warn)" : "var(--ok)"}">${b.shortfall_gb ? fmtGb(b.shortfall_gb) : "keine"}</div><div class="sub">inkl. Reserve; schließen durch Entscheidungen, Freigaben oder Kauf</div></div>
+      </div><p class="hint">Jede Entscheidung „1× reicht“ oder „Löschbar“ senkt den Bedarf und erhöht den freiwerdenden Platz.</p></div>
+
+      <div class="grid two section">
+        <div class="panel"><h3>Phase 1 · Nächste Anschluss-Runden (Überblick)</h3>
+          ${c.phase1.nas_missing ? `<div class="round"><b>NAS</b> <span class="muted">vollständig erfassen (per Kabel am Sicherungs-Mac oder Intel-Mac)</span></div>` : ""}
+          ${c.phase1.rounds.length ? c.phase1.rounds.slice(0, 6).map((r, i) => `<div class="round"><div><b>Runde ${i + 1}</b> <span class="muted">· bei ${esc(r.holder)} · bis zu ${c.ports} gleichzeitig anstecken</span></div>
+            <div class="disks">${r.disks.map((d) => `<a href="#" data-disk="${esc(d.uuid)}" class="tc">${tierBadge(d.tier)} ${esc(d.name)} <span class="faint">${d.age_days == null ? "nie" : d.age_days + " T"}</span></a>`).join("")}</div></div>`).join("")
+            + (c.phase1.rounds.length > 6 ? `<p class="hint">+ ${c.phase1.rounds.length - 6} weitere Runden</p>` : "")
+            : `<div class="muted">Alle Platten sind aktuell (≤ ${c.stale_days} Tage).</div>`}
+          <p class="hint">Einfach anstecken: Der Scanner erfasst die Platte automatisch, das Dashboard aktualisiert sich innerhalb von 15 Minuten.</p>
+        </div>
+        <div class="panel"><h3>Phase 3 · Kopier-Runden</h3>
+          ${c.phase3.rounds.length ? c.phase3.rounds.slice(0, 8).map((r, i) => `<div class="round"><div><b>Runde ${i + 1}</b> · Quelle <a href="#" data-disk="${esc(r.source.uuid)}">${esc(r.source.name)}</a> → ${r.targets.map((t) => `<a href="#" data-disk="${esc(t.uuid)}">${esc(t.name)}</a>`).join(", ")} <span class="muted">· ${fmtGb(r.gb)}</span></div>
+            <div class="sub">${esc(r.targets.flatMap((t) => t.items.map((x) => `${x.name} ${x.type}`)).slice(0, 6).join(" · "))}${r.targets.flatMap((t) => t.items).length > 6 ? " …" : ""}</div></div>`).join("")
+            : `<div class="muted">Noch keine Aufgaben. Kopier-Runden entstehen aus Projekten, die ihr in Phase 2 auf „2× sichern“ stellt.</div>`}
+          ${c.phase3.unplaced_gb ? `<p class="hint" style="color:var(--warn)">${fmtGb(c.phase3.unplaced_gb)} finden derzeit kein Ziel mit genug Platz.</p>` : ""}
+        </div>
+      </div>
+
+      <div class="section"><div class="head" style="margin-bottom:12px"><div><h2>Phase 2 · Entscheiden</h2><p>Projekte, die ihre Regel nicht erfüllen und noch keine Entscheidung haben. Größte zuerst.</p></div></div>
+        <div class="toolbar">${[["alt3", "älter als 3 Jahre"], ["mittel", "1–3 Jahre"], ["neu", "jünger als 1 Jahr"], ["alle", "Alle"]]
+          .map(([k, l]) => `<button class="chip ${ui.clean.age === k ? "on" : ""}" data-age="${k}">${l}<span class="n">${fmtN(nAge(k))}</span></button>`).join("")}</div>
+        <div class="bulkbar"><label class="row" style="gap:6px"><input type="checkbox" id="selall" ${triage.length && triage.slice(0, ui.clean.limit).every((p) => sel.has(p.rule_key)) ? "checked" : ""}> alle sichtbaren</label>
+          <span class="muted">${fmtN(sel.size)} ausgewählt</span><span style="flex:1"></span>
+          <button class="btn small" data-bulk="doppelt" ${sel.size ? "" : "disabled"}>2× sichern</button>
+          <button class="btn small ghost" data-bulk="einfach" ${sel.size ? "" : "disabled"}>1× reicht</button>
+          <button class="btn small ghost" data-bulk="loeschbar" ${sel.size ? "" : "disabled"}>Löschbar</button></div>
+        ${triage.length ? `<table class="table triage"><tbody>${triage.slice(0, ui.clean.limit).map((p) => `
+          <tr><td style="width:28px"><input type="checkbox" data-sel="${esc(p.rule_key)}" ${sel.has(p.rule_key) ? "checked" : ""}></td>
+          <td class="click" data-proj="${esc(p.id)}"><div class="name">${esc(p.name)}</div><div class="sub">${esc(p.date)} · ${esc(p.disks.join(", "))}</div></td>
+          <td>${p.level === "teilweise" ? `<span class="tc c-1"><b>teilweise</b></span> <span class="sub">fehlt ${esc(p.types.filter((t) => t.disks < 2).map((t) => t.type).join(", "))}</span>` : '<span class="tc c-0"><b>nur 1×</b></span>'}</td>
+          <td class="r num">${fmtGb(p.size_gb)}</td>
+          <td class="r"><div class="row" style="justify-content:flex-end;gap:6px">
+            <button class="btn small" data-one="doppelt" data-key="${esc(p.rule_key)}">2×</button>
+            <button class="btn small ghost" data-one="einfach" data-key="${esc(p.rule_key)}">1× reicht</button>
+            <button class="btn small ghost" data-one="loeschbar" data-key="${esc(p.rule_key)}">Löschbar</button></div></td></tr>`).join("")}</tbody></table>
+          ${triage.length > ui.clean.limit ? `<div class="more"><button class="btn ghost" data-more="clean">${fmtN(triage.length - ui.clean.limit)} weitere</button></div>` : ""}`
+          : `<div class="empty">In dieser Auswahl ist alles entschieden.</div>`}
+        <p class="hint">„2× sichern“ erzeugt Kopier-Runden (Phase 3). „1× reicht“: überzählige Kopien werden in Phase 4 frei. „Löschbar“: alle Kopien werden zur Freigabe vorgeschlagen – gelöscht wird nichts automatisch.</p>
+      </div>`;
+    },
     uebersicht() {
       const o = S.overview;
       const tot = Object.values(o.copies).reduce((a, b) => a + b, 0) || 1;
@@ -363,7 +441,7 @@
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); $("#q").focus(); } });
 
   document.addEventListener("click", async (e) => {
-    const t = e.target.closest("[data-sort],[data-proj],[data-disk],[data-pf],[data-tier],[data-prio],[data-more],[data-fstate],[data-save-assign],[data-clear-assign]");
+    const t = e.target.closest("[data-reset-goal],[data-age],[data-one],[data-bulk],[data-sort],[data-proj],[data-disk],[data-pf],[data-tier],[data-prio],[data-more],[data-fstate],[data-save-assign],[data-clear-assign]");
     if (!t) return;
     if (t.dataset.sort) {
       const [table, key] = t.dataset.sort.split(":");
@@ -377,7 +455,25 @@
     if (t.dataset.pf) { ui.proj.filter = t.dataset.pf; ui.proj.limit = 150; history.replaceState(null, "", "#/projekte"); return render(); }
     if (t.dataset.tier) { ui.disk.tier = t.dataset.tier; return render(); }
     if (t.dataset.prio) { ui.find.prio = t.dataset.prio; ui.find.type = ""; return render(); }
-    if (t.dataset.more) { if (t.dataset.more === "proj") ui.proj.limit += 300; else ui.assign.limit += 200; return render(); }
+    if (t.dataset.more) { if (t.dataset.more === "proj") ui.proj.limit += 300; else if (t.dataset.more === "clean") ui.clean.limit += 200; else ui.assign.limit += 200; return render(); }
+    if (t.dataset.resetGoal !== undefined) {
+      e.preventDefault();
+      if (!confirm("Aufräum-Ziel auf den heutigen Stand setzen? Der Fortschritt startet dann bei 0 %.")) return;
+      try { await post("/api/cleanup/baseline", {}); toast("Ziel neu gesetzt"); await load(); render(); } catch (err) { toast(err.message, true); }
+      return;
+    }
+    if (t.dataset.age) { ui.clean.age = t.dataset.age; ui.clean.limit = 120; return render(); }
+    if (t.dataset.one || t.dataset.bulk) {
+      const keys = t.dataset.one ? [t.dataset.key] : [...ui.clean.sel];
+      const level = t.dataset.one || t.dataset.bulk;
+      t.disabled = true;
+      try {
+        const r = await post("/api/rules/bulk", { rule_keys: keys, sicherung: level });
+        ui.clean.sel.clear();
+        toast(`${r.count} ${r.count === 1 ? "Projekt" : "Projekte"}: ${S.meta.sicherung[level].label}`); await load(); render();
+      } catch (err) { toast(err.message, true); t.disabled = false; }
+      return;
+    }
     if (t.dataset.fstate) {
       let note = null;
       if (t.dataset.fstate !== "offen") { note = prompt(t.dataset.fstate === "umgesetzt" ? "Was wurde gemacht? (optional)" : "Warum ignorieren? (optional)"); if (note === null) return; }
@@ -397,6 +493,22 @@
     }
   });
   document.addEventListener("change", (e) => {
+    if (e.target.dataset.sel !== undefined) {
+      e.target.checked ? ui.clean.sel.add(e.target.dataset.sel) : ui.clean.sel.delete(e.target.dataset.sel);
+      const bar = document.querySelector(".bulkbar .muted"); if (bar) bar.textContent = `${fmtN(ui.clean.sel.size)} ausgewählt`;
+      document.querySelectorAll("[data-bulk]").forEach((b) => (b.disabled = !ui.clean.sel.size));
+      return;
+    }
+    if (e.target.id === "selall") {
+      document.querySelectorAll("[data-sel]").forEach((cb) => { cb.checked = e.target.checked;
+        e.target.checked ? ui.clean.sel.add(cb.dataset.sel) : ui.clean.sel.delete(cb.dataset.sel); });
+      return render();
+    }
+    if (e.target.id === "reserve") {
+      post("/api/cleanup/reserve", { months: Number(e.target.value) }).then(async () => { toast("Reserve geändert, Ziel neu gesetzt"); await load(); render(); },
+        (err) => toast(err.message, true));
+      return;
+    }
     if (e.target.id === "ftype") { ui.find.type = e.target.value; render(); }
     if (e.target.id === "fstatus") { ui.find.status = e.target.value; render(); }
   });

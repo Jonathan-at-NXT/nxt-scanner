@@ -13,7 +13,7 @@
  */
 
 import { verifyAccess, devUser } from "./access.js";
-import { analyze, SICHERUNG, TIERS } from "./analysis.js";
+import { analyze, SICHERUNG, TIERS, DEFAULT_RESERVE_MONTHS } from "./analysis.js";
 import { runDerive } from "./derive.js";
 import { validateFolder } from "./notion_sync.js";
 import APP_HTML from "../static/app.html";
@@ -54,7 +54,9 @@ async function loadState(env) {
     q("SELECT * FROM disk_meta"), q("SELECT * FROM project_rule"), q("SELECT * FROM finding_state"),
     q("SELECT * FROM folder_override"), q("SELECT * FROM disk_health"),
   ]);
-  const a = analyze({ projects, disks, diskMeta, rules, states, health });
+  const rm = await env.DB.prepare("SELECT value FROM meta WHERE key='cleanup_reserve_months'").first();
+  const reserveMonths = rm ? Number(rm.value) : DEFAULT_RESERVE_MONTHS;
+  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths });
   // Ordner ohne gültigen Namen (Kandidaten für Soll-Namen), mit Platte
   const diskName = new Map(disks.map((d) => [d.uuid, d.name]));
   const ov = new Map(overrides.map((o) => [`${o.disk_uuid}|${o.rel_path}`, o]));
@@ -64,6 +66,17 @@ async function loadState(env) {
                    size_gb: Math.round(((p.size_bytes || 0) / 1e9) * 100) / 100, files: p.file_count, mtime: p.mtime,
                    soll_name: ov.get(`${p.disk_uuid}|${p.rel_path}`)?.soll_name || null }))
     .sort((x, y) => y.size_gb - x.size_gb);
+  // Startwert des Aufräum-Ziels festhalten (einmalig bzw. nach bewusstem Zurücksetzen)
+  let base = await env.DB.prepare("SELECT value FROM meta WHERE key='cleanup_baseline'").first();
+  if (!base) {
+    const b = { at: now(), shortfall_gb: a.cleanup.balance.shortfall_gb, target_gb: a.cleanup.balance.target_gb };
+    await env.DB.prepare("INSERT OR IGNORE INTO meta(key,value) VALUES('cleanup_baseline',?)").bind(JSON.stringify(b)).run();
+    base = { value: JSON.stringify(b) };
+  }
+  const baseline = JSON.parse(base.value);
+  const closed = Math.max(0, baseline.shortfall_gb - a.cleanup.balance.shortfall_gb);
+  a.cleanup.goal = { baseline, closed_gb: Math.round(closed * 100) / 100,
+                     progress: baseline.shortfall_gb > 0 ? Math.min(1, closed / baseline.shortfall_gb) : 1 };
   a.meta = { sicherung: SICHERUNG, tiers: TIERS, generated_at: now(),
              last_scan: disks.reduce((m, d) => (d.last_scan > m ? d.last_scan : m), "") };
   return a;
@@ -109,6 +122,37 @@ async function handleWrite(path, body, env, user) {
          note=excluded.note, updated_by=excluded.updated_by, updated_at=excluded.updated_at`
     ).bind(key, next.sicherung, next.require_tiers, next.note, who, now()).run();
     await audit(env, who, "regel", key, changed);
+    return { ok: true };
+  }
+  // Sammel-Entscheidung: nur die Sicherungsstufe vieler Projekte setzen (Stufen/Notiz bleiben)
+  if (path === "/api/rules/bulk") {
+    const keys = [...new Set((Array.isArray(body.rule_keys) ? body.rule_keys : []).map((k) => clean(k, 300)).filter(Boolean))];
+    if (!keys.length || keys.length > 1000) throw new Error("1 bis 1000 Projekte auswählen");
+    if (!(body.sicherung in SICHERUNG)) throw new Error("Unbekannte Sicherung");
+    const at = now();
+    const stmt = env.DB.prepare(
+      `INSERT INTO project_rule(rule_key, sicherung, require_tiers, note, updated_by, updated_at) VALUES(?,?,'',NULL,?,?)
+       ON CONFLICT(rule_key) DO UPDATE SET sicherung=excluded.sicherung, updated_by=excluded.updated_by, updated_at=excluded.updated_at`);
+    for (let i = 0; i < keys.length; i += 100) {
+      await env.DB.batch(keys.slice(i, i + 100).map((k) => stmt.bind(k, body.sicherung, who, at)));
+    }
+    await audit(env, who, "regel_sammel", `${keys.length} Projekte`, { sicherung: body.sicherung, rule_keys: keys.slice(0, 50) });
+    return { ok: true, count: keys.length };
+  }
+  if (path === "/api/cleanup/reserve") {    // Reserve-Monate ändern -> Ziel neu setzen
+    const m = Number(body.months);
+    if (![0, 1, 3, 6].includes(m)) throw new Error("Reserve: 0, 1, 3 oder 6 Monate");
+    await env.DB.prepare("INSERT INTO meta(key,value) VALUES('cleanup_reserve_months',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .bind(String(m)).run();
+    await audit(env, who, "ziel_reserve", "Aufräum-Ziel", { reserve_months: m });
+    return handleWrite("/api/cleanup/baseline", {}, env, user);
+  }
+  if (path === "/api/cleanup/baseline") {   // Ziel neu setzen (z. B. nach Plattenkauf), protokolliert
+    const st = await loadState(env);
+    const b = { at: now(), shortfall_gb: st.cleanup.balance.shortfall_gb, target_gb: st.cleanup.balance.target_gb };
+    await env.DB.prepare("INSERT INTO meta(key,value) VALUES('cleanup_baseline',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .bind(JSON.stringify(b)).run();
+    await audit(env, who, "ziel_neu", "Aufräum-Ziel", b);
     return { ok: true };
   }
   if (path === "/api/disk") {
