@@ -63,3 +63,14 @@ test("WORKING nur 1× macht ein Projekt nicht unsicher, FOOTAGE entscheidet", ()
   assert.equal(a.projects[0].missing_gb, 0);
   assert.ok(!a.findings.some((f) => f.type === "MISSING_BACKUP"));
 });
+
+test("Typ-Regel: PHOTOS löschbar zählt nicht für gesichert und wird frei", () => {
+  const ph = (d, gb) => ({ ...proj(d, "2026-04-15_DÖRR ROADSHOW_PHOTOS", gb), type: "PHOTOS" });
+  const a = analyze({
+    disks: [disk("A", "VB02"), disk("B", "TOWER 10")],
+    projects: [proj("A", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 260), proj("B", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 259), ph("A", 400)],
+    rules: [{ rule_key: "2026-04-15|DORR ROADSHOW", sicherung: "doppelt", type_sicherung: JSON.stringify({ PHOTOS: "loeschbar" }) }],
+  });
+  assert.equal(a.projects[0].level, "ok");
+  assert.equal(a.cleanup.phase4.deletable_gb, 400);
+});

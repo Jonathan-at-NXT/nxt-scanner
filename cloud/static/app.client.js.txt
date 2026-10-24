@@ -78,7 +78,7 @@
   const tierBadge = (t) => `<span class="tier ${t ? esc(t) : "none"}">${t ? esc(t) : "?"}</span>`;
   const copyClass = (n) => "c-" + Math.min(n, 3);
   const typeChips = (p) => `<div class="types">${p.types.map((t) =>
-    `<span class="tc ${copyClass(t.disks)}" title="${esc(t.copies.map((c) => c.disk).join(", "))}">${esc(t.type)} <b>${t.disks}×</b></span>`).join("")}</div>`;
+    `<span class="tc ${t.sicherung === "loeschbar" ? "" : copyClass(t.disks)}" title="${esc(t.copies.map((c) => c.disk).join(", "))}">${esc(t.type)} <b>${t.sicherung === "loeschbar" ? "löschbar" : t.disks + "×"}</b></span>`).join("")}</div>`;
   const statusDot = (p) => {
     if (!p.ok) return `<span class="dot kritisch" title="Regel nicht erfüllt"></span>`;
     if ((S.findByCluster.get(p.id) || []).some((f) => f.status === "offen" && f.priority === "warnung")) return `<span class="dot warnung" title="Warnung"></span>`;
@@ -352,6 +352,10 @@
 
       <div class="block"><h3>Ordner &amp; Kopien</h3>
         ${p.types.map((t) => `<div style="margin-bottom:14px"><div class="row" style="justify-content:space-between"><span class="tc ${copyClass(t.disks)}">${esc(t.type)} <b>${t.disks}×</b></span>
+          <label class="sub">Regel für ${esc(t.type)} <select data-type-rule="${esc(t.type)}">
+            <option value="" ${t.type_rule ? "" : "selected"}>wie Projekt (${esc(S.meta.sicherung[p.sicherung]?.label || p.sicherung)})</option>
+            ${Object.entries(S.meta.sicherung).map(([k, v]) => `<option value="${k}" ${t.type_rule === k ? "selected" : ""}>${esc(v.label)}</option>`).join("")}
+          </select></label>
           ${t.mismatch ? '<span class="sub" style="color:var(--warn)">Größen weichen ab</span>' : ""}</div>
           ${t.partial ? `<div class="sub">${t.partial} Teilkopie${t.partial > 1 ? "n" : ""} (unter 95 % des Sollstands, zählen nicht als Kopie)</div>` : ""}
           ${t.copies.map((c) => `<div class="copy"><div><a href="#" data-disk="${esc(c.disk_uuid)}" class="name">${esc(c.disk)}</a> ${tierBadge(c.tier)} <span class="sub">bei ${esc(c.holder || "?")} · Scan ${rel(c.last_scan)}</span>
@@ -362,6 +366,12 @@
       </div>
 
       <div class="block"><h3>Befunde</h3>${fs.length ? fs.map(findingRow).join("") : '<div class="muted">Keine.</div>'}</div>`);
+    document.querySelectorAll("#drawer-body [data-type-rule]").forEach((sel) => sel.addEventListener("change", async () => {
+      try {
+        await post("/api/rule", { rule_key: p.rule_key, type_sicherung: { [sel.dataset.typeRule]: sel.value || null } });
+        toast(`Regel für ${sel.dataset.typeRule} gespeichert`); await load(); render(); projectDrawer(id);
+      } catch (err) { toast(err.message, true); }
+    }));
     document.querySelectorAll("#drawer-body [data-ref-type]").forEach((a) => a.addEventListener("click", async (e) => {
       e.preventDefault();
       try {

@@ -112,6 +112,8 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
     const requireTiers = (rule?.require_tiers || "").split(",").map((s) => s.trim()).filter(Boolean);
     let refCopies = {};
     try { refCopies = JSON.parse(rule?.ref_copies || "{}") || {}; } catch { refCopies = {}; }
+    let typeRule = {};
+    try { typeRule = JSON.parse(rule?.type_sicherung || "{}") || {}; } catch { typeRule = {}; }
 
     const byType = new Map();
     for (const m of members) {
@@ -122,6 +124,9 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
     const types = [];
     let minCopies = Infinity, sizeGb = 0;
     for (const [t, rows] of [...byType].sort()) {
+      // Regel je Ordnertyp (z. B. PHOTOS löschbar) vor der Projektregel
+      const tsich = typeRule[t] && SICHERUNG[typeRule[t]] ? typeRule[t] : sicherung;
+      const tmin = SICHERUNG[tsich].min;
       // Volle Kopie = Platte hat (Summe ihrer Ordner dieses Typs) >= FULL_COPY_RATIO der vollständigsten Platte.
       // Tages-Teilkopien (z. B. SSD mit nur einem Drehtag) zählen nicht als Kopie, sondern als "teilweise".
       const perDisk = new Map();
@@ -143,17 +148,18 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       const maxGb = Math.round(refGb * 100) / 100;
       sizeGb += maxGb;
       types.push({ type: t, copies, disks: disksOf.length, size_gb: maxGb, partial: partialDisks.length, ref,
+                   min: tmin, sicherung: tsich, type_rule: typeRule[t] || null,
                    mismatch: disksOf.length >= 2 && new Set(sizes).size > 1 });
 
       const label = `${members[0].date} ${members[0].project_name}`;
-      const core = CORE_TYPES.has(t) || ![...byType.keys()].some((x) => CORE_TYPES.has(x));
+      const core = (CORE_TYPES.has(t) || ![...byType.keys()].some((x) => CORE_TYPES.has(x))) && tsich !== "loeschbar";
       if (core) minCopies = Math.min(minCopies, disksOf.length);
       types[types.length - 1].core = core;
-      if (disksOf.length < min && core) {
+      if (disksOf.length < tmin && core) {
         add({ key: `MISSING_BACKUP|${cid}|${t}`, type: "MISSING_BACKUP", cluster: cid, project: label, folder_type: t,
               disks: disksOf, size_gb: maxGb,
-              details: (disksOf.length ? `Vollständig nur auf ${disksOf.map((u) => disk.get(u)?.name || "?").join(", ")} (${fg(maxGb)}), Soll: ${min}×`
-                                       : `Keine vollständige Kopie, Soll: ${min}×`) +
+              details: (disksOf.length ? `Vollständig nur auf ${disksOf.map((u) => disk.get(u)?.name || "?").join(", ")} (${fg(maxGb)}), Soll: ${tmin}×`
+                                       : `Keine vollständige Kopie, Soll: ${tmin}×`) +
                        (partialDisks.length ? ` · Teilkopien: ${partialDisks.map((u) => `${disk.get(u)?.name || "?"} (${fg(perDisk.get(u))})`).join(", ")}` : "") });
       }
       if (disksOf.length >= 2 && new Set(sizes).size > 1) {
@@ -163,7 +169,7 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
               details: disksOf.map((u) => `${disk.get(u)?.name || "?"}: ${fg(perDisk.get(u))}`).join(" vs ") + ` (Differenz ${fg(diff)})` });
       }
       // Teilkopien sind überflüssig, sobald die Regel mit vollständigen Kopien erfüllt ist (Löschbar zählt eigens)
-      if (partialDisks.length && sicherung !== "loeschbar" && disksOf.length >= Math.max(min, 1)) {
+      if (partialDisks.length && tsich !== "loeschbar" && disksOf.length >= Math.max(tmin, 1)) {
         const pgb = partialDisks.reduce((s, u) => s + perDisk.get(u), 0);
         add({ key: `PARTIAL_COPY|${cid}|${t}`, type: "PARTIAL_COPY", cluster: cid, project: label, folder_type: t,
               disks: partialDisks, size_gb: maxGb, savings_gb: Math.round(pgb * 100) / 100,
@@ -176,11 +182,11 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
               disks: extra.map(([u]) => u), size_gb: maxGb, savings_gb: Math.round(extra.reduce((s, [, x]) => s + x, 0) * 100) / 100,
               details: `Sollstand ${fg(refGb)} (${disk.get(ref)?.name || "?"}); mehr Material auf: ` + extra.map(([u, x]) => `${disk.get(u)?.name || "?"} (+${fg(x)})`).join(", ") });
       }
-      if (disksOf.length > Math.max(min, 2) && sicherung !== "einfach" && sicherung !== "loeschbar") {
-        const extra = disksOf.length - Math.max(min, 2);
+      if (disksOf.length > Math.max(tmin, 2) && tsich !== "einfach" && tsich !== "loeschbar") {
+        const extra = disksOf.length - Math.max(tmin, 2);
         add({ key: `EXCESS_COPIES|${cid}|${t}`, type: "EXCESS_COPIES", cluster: cid, project: label, folder_type: t,
               disks: disksOf, size_gb: maxGb, savings_gb: Math.round(maxGb * extra * 100) / 100,
-              details: `${disksOf.length} vollständige Kopien (Soll ${Math.max(min, 2)}): ` + disksOf.map((u) => `${disk.get(u)?.name || "?"} (${fg(perDisk.get(u))})`).join(", ") });
+              details: `${disksOf.length} vollständige Kopien (Soll ${Math.max(tmin, 2)}): ` + disksOf.map((u) => `${disk.get(u)?.name || "?"} (${fg(perDisk.get(u))})`).join(", ") });
       }
     }
 
@@ -222,12 +228,15 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
     }
 
     const copiesOverall = minCopies === Infinity ? 0 : minCopies;
-    const maxCopies = Math.max(0, ...types.filter((t) => t.core).map((t) => t.disks));
-    // Fehlender Teil: nur Rohmaterial-Typen unter der Regel zählen (WORKING etc. eigens als "soft")
-    const missingGb = Math.round(types.filter((t) => t.core && t.disks < min).reduce((s, t) => s + t.size_gb, 0) * 100) / 100;
+    const coreTypes = types.filter((t) => t.core);
+    const maxCopies = Math.max(0, ...coreTypes.map((t) => t.disks));
+    // Fehlender Teil: nur Rohmaterial-Typen unter ihrer Regel zählen (WORKING etc. eigens als "soft")
+    const missingGb = Math.round(coreTypes.filter((t) => t.disks < t.min).reduce((s, t) => s + t.size_gb, 0) * 100) / 100;
+    const okAll = coreTypes.every((t) => t.disks >= t.min);
+    const projMin = Math.max(0, ...coreTypes.map((t) => t.min));
     // Sicherungsstand: einfach = kein Teil hat eine zweite Kopie, teilweise = gemischt
-    const level = min <= 1 ? (copiesOverall >= min ? "ok" : "einfach")
-      : copiesOverall >= min ? (copiesOverall >= 3 ? "mehrfach" : "ok")
+    const level = projMin <= 1 ? (okAll ? "ok" : "einfach")
+      : okAll ? (coreTypes.length && coreTypes.every((t) => t.disks >= 3) ? "mehrfach" : "ok")
       : maxCopies >= 2 ? "teilweise" : "einfach";
     out.push({
       id: cid, rule_key: rk || keys[0], date: members[0].date,
@@ -237,9 +246,9 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       disks: [...new Set([...new Set(members.map((m) => m.disk_uuid))].map((u) => disk.get(u)?.name || u))],
       tiers: [...tiersPresent].sort(),
       copies: copiesOverall, copies_max: maxCopies, level, missing_gb: missingGb,
-      sicherung, sicherung_min: min, require_tiers: requireTiers,
+      sicherung, sicherung_min: projMin, require_tiers: requireTiers, type_rules: typeRule,
       rule_note: rule?.note || null, rule_by: rule?.updated_by || null, decided: !!rule,
-      ok: copiesOverall >= min && requireTiers.every((t) => tiersPresent.has(t)),
+      ok: okAll && requireTiers.every((t) => tiersPresent.has(t)),
     });
   }
 
@@ -316,7 +325,7 @@ function overview(projects, disks, findings) {
     next: unsecured.sort((a, b) => b.missing_gb - a.missing_gb).slice(0, 8)
       .map((p) => ({ id: p.id, name: `${p.date} ${p.name}`, size_gb: p.size_gb, missing_gb: p.missing_gb, level: p.level,
                      copies: p.copies, min: p.sicherung_min, disks: p.disks,
-                     missing_types: p.types.filter((t) => t.disks < p.sicherung_min).map((t) => t.type) })),
+                     missing_types: p.types.filter((t) => t.core && t.disks < t.min).map((t) => t.type) })),
   };
 }
 
@@ -395,12 +404,12 @@ export function cleanupPlan(projects, disks, findings, now = Date.now(), reserve
   const targetsPref = real.filter((d) => free.has(d.uuid) && ["HDD", "NAS"].includes(d.tier));
   const tasks = [];
   for (const p of projects) {
-    if (!p.decided || p.ok || p.sicherung_min < 2) continue;
+    if (!p.decided || p.ok) continue;
     for (const t of p.types) {
-      if (t.disks >= p.sicherung_min || !t.copies.length) continue;
+      if (!t.core || t.min < 2 || t.disks >= t.min || !t.copies.length) continue;
       tasks.push({ project: p.id, name: `${p.date} ${p.name}`, type: t.type, gb: t.size_gb,
                    source: t.copies[0].disk_uuid, source_name: t.copies[0].disk,
-                   has: new Set(t.copies.map((c) => c.disk_uuid)), need: p.sicherung_min - t.disks });
+                   has: new Set(t.copies.map((c) => c.disk_uuid)), need: t.min - t.disks });
     }
   }
   // Je Quellplatte eine Runde; Ziele mit dem meisten Platz zuerst, Platz wird reserviert
@@ -432,10 +441,12 @@ export function cleanupPlan(projects, disks, findings, now = Date.now(), reserve
   // Phase 4: Freigeben
   const sumOpen = (type) => findings.filter((f) => f.type === type && f.status === "offen").reduce((s, f) => s + (f.savings_gb || 0), 0);
   const excessGb = sumOpen("EXCESS_COPIES"), partialGb = sumOpen("PARTIAL_COPY"), refExtraGb = sumOpen("REF_EXTRA");
-  const deletable = projects.filter((p) => p.sicherung === "loeschbar");
-  const deletableGb = deletable.reduce((s, p) => s + p.types.reduce((x, t) => x + t.copies.reduce((y, c) => y + c.size_gb, 0), 0), 0);
-  const singleExtraGb = projects.filter((p) => p.sicherung === "einfach")
-    .reduce((s, p) => s + p.types.reduce((x, t) => x + Math.max(0, t.disks - 1) * t.size_gb, 0), 0);
+  // Löschbar / 1× reicht gelten je Ordnertyp (Projektregel oder Typ-Regel, z. B. nur PHOTOS löschbar)
+  const deletable = projects.filter((p) => p.types.some((t) => t.sicherung === "loeschbar"));
+  const deletableGb = projects.reduce((s, p) => s + p.types.filter((t) => t.sicherung === "loeschbar")
+    .reduce((x, t) => x + t.copies.reduce((y, c) => y + c.size_gb, 0), 0), 0);
+  const singleExtraGb = projects.reduce((s, p) => s + p.types.filter((t) => t.sicherung === "einfach")
+    .reduce((x, t) => x + Math.max(0, t.disks - 1) * t.size_gb, 0), 0);
   const phase4 = { excess_gb: round(excessGb), partial_gb: round(partialGb), ref_extra_gb: round(refExtraGb),
                    deletable_gb: round(deletableGb), single_extra_gb: round(singleExtraGb),
                    total_gb: round(excessGb + partialGb + refExtraGb + deletableGb + singleExtraGb), deletable_projects: deletable.length };
