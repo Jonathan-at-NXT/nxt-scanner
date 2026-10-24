@@ -290,6 +290,8 @@ function overview(projects, disks, findings) {
 
 // ── Aufräum-Plan ──────────────────────────────────────────────────
 export const STALE_DAYS = 60;        // älter = für den Überblick neu scannen
+// Phase 1 = einmal alles mit dem neuen Scanner (Datei-Katalog) erfassen: alles davor gilt als offen
+export const PHASE1_SINCE = "2026-10-22T00:00:00+02:00";
 const MARGIN = 0.05;                 // Ziele nie über 95 % füllen
 const SMALL_TB = 6;                  // Platten bis zu dieser Größe kommen in den Runden zuletzt
 const PORTS = 3;                     // Anschlüsse; ein Gehäuse mit mehreren Platten belegt nur einen
@@ -307,7 +309,9 @@ export function cleanupPlan(projects, disks, findings, now = Date.now(), reserve
   const ageDays = (d) => (d.last_scan ? (now - Date.parse(d.last_scan)) / 86400000 : Infinity);
 
   // Phase 1: Überblick
-  const toScan = real.filter((d) => ageDays(d) > STALE_DAYS).sort((a, b) => ageDays(b) - ageDays(a));
+  const since = Date.parse(PHASE1_SINCE);
+  const toScan = real.filter((d) => ageDays(d) > STALE_DAYS || !d.last_scan || Date.parse(d.last_scan) < since)
+    .sort((a, b) => ageDays(b) - ageDays(a));
   const hasNas = real.some((d) => d.tier === "NAS");
   const byHolder = new Map();
   for (const d of toScan) {

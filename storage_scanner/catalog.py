@@ -732,3 +732,87 @@ def scan_via_catalog(mount: str, report_path: str, conn: sqlite3.Connection | No
     tmp.write_text(json.dumps(rep, ensure_ascii=False, indent=1))
     tmp.replace(out)
     return rep
+
+
+# ── Katalog nach D1 synchronisieren (nur Änderungen, fortsetzbar) ──────
+
+SYNC_BATCH = 2000
+
+
+def _ensure_sync_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS sync_state (
+        volume_uuid TEXT PRIMARY KEY, w_ts TEXT, w_id INTEGER, synced_at TEXT)""")
+
+
+def sync_to_d1(conn: sqlite3.Connection, uuid: str, post, host: str = "", batch: int = SYNC_BATCH,
+               progress=None) -> dict:
+    """Schickt alle Änderungen seit dem letzten bestätigten Paket an D1.
+
+    Cursor (changed_at, id): eine Inventur stempelt viele Zeilen mit derselben Zeit, deshalb
+    zusätzlich die Zeilen-ID. Nach jedem bestätigten Paket wird der Cursor gespeichert –
+    bricht die Verbindung ab, geht es beim nächsten Mal genau dort weiter.
+    `post(payload) -> bool` wirft bei Netzfehlern (Upload-Queue wiederholt dann später).
+    """
+    if uuid.startswith("name:"):
+        return {"sent": 0, "skipped": "keine echte Volume-UUID"}
+    _ensure_sync_table(conn)
+    row = conn.execute("SELECT w_ts, w_id FROM sync_state WHERE volume_uuid=?", (uuid,)).fetchone()
+    w_ts, w_id = (row or ("", 0))
+    sent = 0
+    while True:
+        rows = conn.execute(
+            """SELECT id, changed_at, rel_path, name, size, mtime, kind, present FROM file
+               WHERE volume_uuid=? AND (changed_at > ? OR (changed_at = ? AND id > ?))
+               ORDER BY changed_at, id LIMIT ?""", (uuid, w_ts or "", w_ts or "", w_id or 0, batch)).fetchall()
+        last = len(rows) < batch
+        payload = {"disk_uuid": uuid, "host": host,
+                   "upserts": [[r[2], r[3], r[4], r[5], r[6]] for r in rows if r[7]],
+                   "deletes": [r[2] for r in rows if not r[7]]}
+        if last:
+            f, b = conn.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM file WHERE volume_uuid=? AND present=1",
+                                (uuid,)).fetchone()
+            payload["totals"] = {"files": f, "bytes": b}
+        if rows or last:
+            if not post(payload):
+                raise RuntimeError("Katalog-Upload ohne 2xx")
+        if rows:
+            w_id, w_ts = rows[-1][0], rows[-1][1]
+            with conn:
+                conn.execute("""INSERT INTO sync_state(volume_uuid, w_ts, w_id, synced_at) VALUES(?,?,?,?)
+                                ON CONFLICT(volume_uuid) DO UPDATE SET w_ts=excluded.w_ts, w_id=excluded.w_id,
+                                synced_at=excluded.synced_at""", (uuid, w_ts, w_id, _now()))
+            sent += len(rows)
+            if progress:
+                progress(sent)
+        if last:
+            return {"sent": sent}
+
+
+def http_poster(timeout: float = 120):
+    """POST an <d1_ingest_url>/ingest/files mit dem D1-Token aus der Config."""
+    import httpx
+    from .notion_sync import load_config
+    c = load_config()
+    url, token = c.get("d1_ingest_url", ""), c.get("d1_token", "")
+    if not url or not token:
+        raise RuntimeError("D1 nicht eingerichtet")
+
+    def post(payload):
+        r = httpx.post(url.rstrip("/") + "/ingest/files", json=payload,
+                       headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
+        return 200 <= r.status_code < 300
+    return post
+
+
+SYNC_DIR = DATA_DIR / "catalog_sync"
+
+
+def enqueue_sync(uuid: str, name: str) -> None:
+    """Merkt den Katalog-Upload eines Datenträgers in der Upload-Queue vor (offline-fest)."""
+    if uuid.startswith("name:"):
+        return
+    from . import outbox
+    SYNC_DIR.mkdir(parents=True, exist_ok=True)
+    marker = SYNC_DIR / (uuid.replace("/", "_").replace(":", "_") + ".json")
+    marker.write_text(json.dumps({"uuid": uuid, "name": name}))
+    outbox.enqueue(str(marker), channels=["files"])

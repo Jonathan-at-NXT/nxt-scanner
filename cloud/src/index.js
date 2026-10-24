@@ -346,6 +346,44 @@ export default {
     // ── Rollout-Tracking abgeschlossen (offline genommen 2026-08). ──
     // buildRollout()/ROLLOUT_HTML bleiben im Code erhalten, um es bei Bedarf
     // (neue Datenträger) mit einem Route-Eintrag wieder zu aktivieren.
+    // ── Datei-Katalog (Bearer INGEST_TOKEN): Änderungen je Datenträger in Paketen ──
+    // Body: {disk_uuid, upserts: [[rel_path, name, size, mtime, kind], ...], deletes: [rel_path, ...], totals?: {files, bytes}, host?}
+    if (url.pathname === "/ingest/files" && request.method === "POST") {
+      if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+      let b;
+      try { b = await request.json(); } catch { return json({ error: "invalid json" }, 400); }
+      const disk = typeof b?.disk_uuid === "string" ? b.disk_uuid.slice(0, 100) : "";
+      const ups = Array.isArray(b?.upserts) ? b.upserts : [];
+      const dels = Array.isArray(b?.deletes) ? b.deletes : [];
+      if (!disk || disk.startsWith("name:") || ups.length + dels.length > 5000) return json({ error: "invalid batch" }, 400);
+      const stmts = [];
+      // json_each: ein Parameter pro Statement statt 100er-Grenze für gebundene Werte
+      for (let i = 0; i < ups.length; i += 1000) {
+        stmts.push(env.CATALOG.prepare(
+          `INSERT INTO files(disk_uuid, rel_path, name, size, mtime, kind)
+           SELECT ?1, j.value->>0, j.value->>1, j.value->>2, j.value->>3, j.value->>4 FROM json_each(?2) j WHERE true
+           ON CONFLICT(disk_uuid, rel_path) DO UPDATE SET name=excluded.name, size=excluded.size,
+             mtime=excluded.mtime, kind=excluded.kind`).bind(disk, JSON.stringify(ups.slice(i, i + 1000))));
+      }
+      for (let i = 0; i < dels.length; i += 1000) {
+        stmts.push(env.CATALOG.prepare(
+          "DELETE FROM files WHERE disk_uuid=?1 AND rel_path IN (SELECT value FROM json_each(?2))")
+          .bind(disk, JSON.stringify(dels.slice(i, i + 1000))));
+      }
+      if (b.totals) {
+        stmts.push(env.CATALOG.prepare(
+          `INSERT INTO disk_sync(disk_uuid, files, bytes, synced_at, host) VALUES(?,?,?,?,?)
+           ON CONFLICT(disk_uuid) DO UPDATE SET files=excluded.files, bytes=excluded.bytes, synced_at=excluded.synced_at, host=excluded.host`)
+          .bind(disk, Math.round(b.totals.files || 0), Math.round(b.totals.bytes || 0), new Date().toISOString(), String(b.host || "").slice(0, 100)));
+      }
+      try {
+        if (stmts.length) await env.CATALOG.batch(stmts);
+      } catch (e) {
+        return json({ error: "db", detail: String(e) }, 500);
+      }
+      return json({ ok: true, upserts: ups.length, deletes: dels.length });
+    }
+
     // ── Fortschritt laufender Arbeiten (Bearer INGEST_TOKEN), nur Anzeige ──
     if (url.pathname === "/ingest/progress" && request.method === "POST") {
       if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);

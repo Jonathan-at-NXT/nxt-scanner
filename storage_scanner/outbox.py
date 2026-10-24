@@ -94,7 +94,24 @@ def _send_health(path: str, user_name: str) -> None:
         raise RuntimeError("Health-Push ohne 2xx")
 
 
-SENDERS = {"d1": _send_d1, "notion": _send_notion, "health": _send_health}
+def _send_files(path: str, user_name: str) -> None:
+    """Datei-Katalog eines Datenträgers nach D1 (nur Änderungen seit dem letzten Paket)."""
+    import socket
+    from .catalog import connect, http_poster, sync_to_d1
+    from .progress import Reporter
+    info = json.loads(Path(path).read_text())
+    conn = connect()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM file WHERE volume_uuid=?", (info["uuid"],)).fetchone()[0]
+        rep = Reporter("katalog", info["uuid"], info.get("name") or info["uuid"], total_files=total)
+        r = sync_to_d1(conn, info["uuid"], http_poster(), host=socket.gethostname(),
+                       progress=lambda n: rep.update(n, 0))
+        rep.finish(r.get("sent", 0), 0)
+    finally:
+        conn.close()
+
+
+SENDERS = {"d1": _send_d1, "notion": _send_notion, "health": _send_health, "files": _send_files}
 
 
 def channels_for(config: dict) -> list[str]:

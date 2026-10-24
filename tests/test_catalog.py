@@ -254,3 +254,15 @@ def test_scan_via_catalog_writes_report_once(tmp_path, monkeypatch):
     saved = _j.loads(out.read_text())
     assert saved["scan_info"]["volume_uuid"] == "U9" and saved["scan_info"]["complete"]
     assert {n["rel_path"] for n in saved["folder_tree"] if n["depth"] == 1} == {"2025-01-01_A_FOOTAGE", "LOSE"}
+
+
+def test_disk_usage_fixes_statvfs_overflow(monkeypatch):
+    import shutil, subprocess, plistlib
+    from collections import namedtuple
+    from storage_scanner import report
+    U = namedtuple("U", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: U(407986241536, -1344648392704, 1752634634240))
+    plist = plistlib.dumps({"TotalSize": 18000000000000, "FreeSpace": 1752634634240})
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: type("R", (), {"stdout": plist})())
+    d = report._disk_usage("/Volumes/X")
+    assert d["total_bytes"] == 18000000000000 and d["used_bytes"] == 18000000000000 - 1752634634240

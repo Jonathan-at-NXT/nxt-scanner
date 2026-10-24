@@ -39,9 +39,21 @@ def _disk_usage(path: str) -> dict | None:
     """Kapazität zum Scan-Zeitpunkt, damit ein späterer (Offline-)Sync korrekte Werte hat."""
     try:
         u = shutil.disk_usage(path)
-        return {"total_bytes": u.total, "used_bytes": u.used, "free_bytes": u.free}
     except OSError:
         return None
+    total, free = u.total, u.free
+    if free > total:
+        # statvfs zählt auf macOS in 32 Bit: Volumes > 16 TiB laufen über (18 TB → 0,4 TB).
+        # Dann gilt diskutil (64 Bit).
+        try:
+            import plistlib, subprocess
+            info = plistlib.loads(subprocess.run(["diskutil", "info", "-plist", path],
+                                                 capture_output=True, timeout=30).stdout)
+            total = int(info.get("APFSContainerSize") or info.get("TotalSize") or 0) or total
+            free = int(info.get("APFSContainerFree") or info.get("FreeSpace") or info.get("AvailableSpace") or free)
+        except Exception:  # noqa: BLE001 - lieber Rohwert als gar keiner
+            return None
+    return {"total_bytes": total, "used_bytes": total - free, "free_bytes": free}
 
 
 def save_report(report: dict, output_path: Path) -> None:
