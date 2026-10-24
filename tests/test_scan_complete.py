@@ -77,3 +77,24 @@ def test_auto_scan_all_only_physical(monkeypatch):
     monkeypatch.setattr(auto_scan, "_is_physical_local", lambda n: n == "LaCie")
     assert auto_scan.is_auto_scan_volume("LaCie")
     assert not auto_scan.is_auto_scan_volume("Blackmagic DaVinci Resolve Studio")
+
+
+def test_unreadable_root_raises_instead_of_silent_success(tmp_path, monkeypatch):
+    vol = _vol(tmp_path)
+    real = scan.os.scandir
+
+    def deny(p):
+        if str(p) == str(vol):
+            raise PermissionError(13, "Permission denied")
+        return real(p)
+
+    monkeypatch.setattr(scan.os, "scandir", deny)
+    with pytest.raises(scan.ScanIncomplete, match="Lesezugriff"):
+        scan.run_scan(str(vol), str(tmp_path / "r.json"))
+
+
+def test_empty_disk_writes_report(tmp_path):
+    vol = tmp_path / "leer"; vol.mkdir()
+    out = tmp_path / "r.json"
+    scan.run_scan(str(vol), str(out))
+    assert json.loads(out.read_text())["scan_info"]["complete"] is True

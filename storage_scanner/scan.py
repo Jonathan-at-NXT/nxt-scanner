@@ -213,6 +213,13 @@ def run_scan(volume_path: str, output_path: str) -> None:
     if not scan_path.is_dir():
         raise NotADirectoryError(f"Pfad ist kein Verzeichnis: {scan_path}")
 
+    # Oberste Ebene muss lesbar sein; sonst ist es kein leerer Datenträger, sondern ein
+    # Rechteproblem (z. B. macOS-Freigabe "Wechseldatenträger" fehlt) -> Fehler statt still nichts
+    try:
+        next(iter(os.scandir(scan_path)), None)
+    except PermissionError as e:
+        raise ScanIncomplete(f"Kein Lesezugriff auf {scan_path} – in den Systemeinstellungen unter "
+                             f"Datenschutz & Sicherheit → Dateien und Ordner den Zugriff auf Wechseldatenträger erlauben") from e
     raw_folders = _safe_listdir(scan_path)
     subfolders = []
     for folder in raw_folders:
@@ -221,8 +228,7 @@ def run_scan(volume_path: str, output_path: str) -> None:
         else:
             subfolders.append(folder)
 
-    if not subfolders:
-        return
+    # Leerer Datenträger: trotzdem einen (leeren) Report schreiben, damit er als gescannt gilt
 
     projects = []
     unassigned = []
