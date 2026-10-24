@@ -27,3 +27,6 @@ __pycache__/
 cloud/.dev.vars
 cloud/.wrangler/
 resources/bin/
+
+# Lokale Claude-Einstellungen gehören nicht ins Repo
+.claude/
