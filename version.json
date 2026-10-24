@@ -1,5 +1,5 @@
 {
-  "version": "2.0.0",
+  "version": "2.0.1",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Scans gehen jetzt in einem Durchlauf und deutlich schneller. Jede Datei (Name, Größe, Datum, kein Inhalt) landet im zentralen Datei-Katalog, damit wir Projekte auch unter anderem Namen wiederfinden. Neu: Platten-Check (SMART), bei SSDs inkl. Verschleiß. Scans laufen auch offline (Warteschlange) und unvollständige Scans werden nicht mehr als „0 Dateien“ hochgeladen. Notion wird zentral befüllt, kein Notion-Zugang mehr nötig. Wichtig nach dem Update: einmal den Zugriff auf Wechseldatenträger erlauben (Dialog bestätigen oder Systemeinstellungen > Datenschutz & Sicherheit > Dateien und Ordner > NXT Scanner)."
+  "release_notes": "Fix: Scans von exFAT-Platten brachen teilweise ab („int too large“). Scans gehen jetzt in einem Durchlauf und deutlich schneller. Jede Datei (Name, Größe, Datum, kein Inhalt) landet im zentralen Datei-Katalog, damit wir Projekte auch unter anderem Namen wiederfinden. Neu: Platten-Check (SMART), bei SSDs inkl. Verschleiß. Scans laufen auch offline (Warteschlange) und unvollständige Scans werden nicht mehr als „0 Dateien“ hochgeladen. Notion wird zentral befüllt, kein Notion-Zugang mehr nötig. Wichtig nach dem Update: einmal den Zugriff auf Wechseldatenträger erlauben (Dialog bestätigen oder Systemeinstellungen > Datenschutz & Sicherheit > Dateien und Ordner > NXT Scanner)."
 }
