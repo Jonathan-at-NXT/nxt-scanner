@@ -240,3 +240,17 @@ def test_system_folder_variants_are_skipped(tmp_path):
     conn = catalog.connect(":memory:")
     r = catalog.inventory(str(tmp_path), conn, vol=_vol())
     assert r["files"] == 1 and r["complete"]
+
+
+def test_scan_via_catalog_writes_report_once(tmp_path, monkeypatch):
+    vol = tmp_path / "vol"
+    _write(vol, "2025-01-01_A_FOOTAGE/FX3/c.mp4", b"x" * 100)
+    _write(vol, "LOSE/x.txt", b"1")
+    monkeypatch.setattr(catalog, "volume_info", lambda m, serials=None: _vol("U9", "TOWER 9"))
+    out = tmp_path / "r.json"
+    conn = catalog.connect(":memory:")
+    rep = catalog.scan_via_catalog(str(vol), str(out), conn=conn)
+    import json as _j
+    saved = _j.loads(out.read_text())
+    assert saved["scan_info"]["volume_uuid"] == "U9" and saved["scan_info"]["complete"]
+    assert {n["rel_path"] for n in saved["folder_tree"] if n["depth"] == 1} == {"2025-01-01_A_FOOTAGE", "LOSE"}

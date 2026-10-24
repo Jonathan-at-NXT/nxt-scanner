@@ -627,7 +627,14 @@ class StorageScannerApp(rumps.App):
 
         try:
             # Scan + lokale Ablage laufen immer, auch offline
-            run_scan(volume_path, str(report_path))
+            from .notion_sync import load_config as _lc
+            _cfg = _lc()
+            _single = bool(_cfg.get('file_catalog') and _cfg.get('d1_ingest_url') and _cfg.get('d1_token'))
+            if _single:
+                from .catalog import scan_via_catalog  # ein Durchlauf statt du/find je Ordner
+                scan_via_catalog(volume_path, str(report_path))
+            else:
+                run_scan(volume_path, str(report_path))
 
             from .db import db_ingest_safe
             db_ingest_safe(str(report_path), user_name=self._user_name)
@@ -656,7 +663,8 @@ class StorageScannerApp(rumps.App):
             from .health import health_safe
             health_safe(volume_path, load_config())  # Platten-Check (opt-in)
             from .catalog import catalog_safe
-            catalog_safe(volume_path, load_config())
+            if not _single:
+                catalog_safe(volume_path, load_config())
         except Exception as e:
             self._fail_counts[volume_name] = self._fail_counts.get(volume_name, 0) + 1
             self._scan_times[volume_name] = datetime.now().isoformat()

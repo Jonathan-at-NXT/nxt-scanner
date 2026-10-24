@@ -121,7 +121,14 @@ def scan_and_sync(volume_name: str) -> bool:
     log.info(f"Starte Scan: {volume_path}")
 
     try:
-        run_scan(volume_path, str(report_path))
+        from .notion_sync import load_config as _lc
+        _cfg = _lc()
+        _single = bool(_cfg.get('file_catalog') and _cfg.get('d1_ingest_url') and _cfg.get('d1_token'))
+        if _single:
+            from .catalog import scan_via_catalog  # ein Durchlauf statt du/find je Ordner
+            scan_via_catalog(volume_path, str(report_path))
+        else:
+            run_scan(volume_path, str(report_path))
         log.info(f"Scan abgeschlossen: {volume_name}")
 
         from .db import db_ingest_safe
@@ -140,7 +147,8 @@ def scan_and_sync(volume_name: str) -> bool:
         from .health import health_safe
         health_safe(volume_path, load_config())  # Platten-Check (opt-in)
         from .catalog import catalog_safe
-        catalog_safe(volume_path, load_config())
+        if not _single:
+            catalog_safe(volume_path, load_config())
         return True
     except Exception as e:
         log.error(f"Fehler bei {volume_name}: {e}")

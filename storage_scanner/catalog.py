@@ -705,3 +705,30 @@ def report_from_catalog(conn: sqlite3.Connection, uuid: str, mount: str, name: s
                       "complete": bool(run and run[0]), "incomplete_folders": [], "source": "catalog"},
         "projects": [], "unassigned": [], "folder_tree": tree, "_display_name": name,
     }
+
+
+
+def scan_via_catalog(mount: str, report_path: str, conn: sqlite3.Connection | None = None) -> dict:
+    """Ein einziger Durchlauf: Inventur (stat) → Report wie run_scan, aber Größen/Baum aus dem Katalog.
+
+    Auf HDDs 3–4× schneller als run_scan (das jeden Ordner per du + find + Baum mehrfach liest).
+    Wirft scan.ScanIncomplete, wenn die Inventur unvollständig war (Report wird dann nicht geschrieben).
+    """
+    import socket
+    from .scan import ScanIncomplete
+    own = conn is None
+    conn = conn or connect()
+    try:
+        res = inventory(mount, conn, host=socket.gethostname())
+        if not res["complete"]:
+            raise ScanIncomplete(f"Inventur unvollständig ({res['errors']} Fehler) – nichts hochgeladen")
+        rep = report_from_catalog(conn, res["uuid"], str(Path(mount)), name=res["name"])
+    finally:
+        if own:
+            conn.close()
+    out = Path(report_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".tmp")
+    tmp.write_text(json.dumps(rep, ensure_ascii=False, indent=1))
+    tmp.replace(out)
+    return rep
