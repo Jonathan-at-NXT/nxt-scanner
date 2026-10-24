@@ -650,11 +650,6 @@ def main(argv=None):
                   f"Serial {serial or '-':18} {uuid}  zuletzt {last}")
     conn.close()
 
-
-if __name__ == "__main__":
-    main()
-
-
 # ── Scan-Report aus dem Katalog (für Netzfreigaben wie das NAS) ────
 
 _FLAT_CONTAINERS = {"NXT STUDIOS", "OLDER"}   # wie scan.py: Inhalt zählt als oberste Ebene
@@ -857,3 +852,7 @@ def enqueue_sync(uuid: str, name: str) -> None:
     marker = SYNC_DIR / (uuid.replace("/", "_").replace(":", "_") + ".json")
     marker.write_text(json.dumps({"uuid": uuid, "name": name}))
     outbox.enqueue(str(marker), channels=["files"])
+
+
+if __name__ == "__main__":
+    main()
