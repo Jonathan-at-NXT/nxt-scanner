@@ -309,8 +309,8 @@ export function cleanupPlan(projects, disks, findings, now = Date.now(), reserve
   const ageDays = (d) => (d.last_scan ? (now - Date.parse(d.last_scan)) / 86400000 : Infinity);
 
   // Phase 1: Überblick
-  const since = Date.parse(PHASE1_SINCE);
-  const toScan = real.filter((d) => ageDays(d) > STALE_DAYS || !d.last_scan || Date.parse(d.last_scan) < since)
+  const phase1Since = Date.parse(PHASE1_SINCE);
+  const toScan = real.filter((d) => ageDays(d) > STALE_DAYS || !d.last_scan || Date.parse(d.last_scan) < phase1Since)
     .sort((a, b) => ageDays(b) - ageDays(a));
   const hasNas = real.some((d) => d.tier === "NAS");
   const byHolder = new Map();
