@@ -305,14 +305,28 @@ async function handleWrite(path, body, env, user) {
       if (v !== next.separate_disk) changed.separate_disk = [next.separate_disk, v];
       next.separate_disk = v;
     }
+    // Entfernen (umkehrbar) mit Grund / Wiederherstellen
+    next.retired_at = cur.retired_at ?? null; next.retired_reason = cur.retired_reason ?? null;
+    if ("retire" in body) {
+      if (body.retire) {
+        const reason = clean(body.retire_reason, 300);
+        if (!reason) throw new Error("Bitte einen Grund angeben");
+        changed.entfernt = [next.retired_reason, reason];
+        next.retired_at = now(); next.retired_reason = reason;
+      } else if (next.retired_at) {
+        changed.entfernt = [next.retired_reason, null];
+        next.retired_at = null; next.retired_reason = null;
+      }
+    }
     if (!Object.keys(changed).length) return { ok: true, unchanged: true };
     await env.DB.prepare(
-      `INSERT INTO disk_meta(disk_uuid, tier, tier_source, holder, location, note, separate_disk, enclosure, updated_by, updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO disk_meta(disk_uuid, tier, tier_source, holder, location, note, separate_disk, enclosure, retired_at, retired_reason, updated_by, updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(disk_uuid) DO UPDATE SET tier=excluded.tier, tier_source=excluded.tier_source, holder=excluded.holder,
          location=excluded.location, note=excluded.note, separate_disk=excluded.separate_disk, enclosure=excluded.enclosure,
-         updated_by=excluded.updated_by, updated_at=excluded.updated_at`
-    ).bind(uuid, next.tier, next.tier_source, next.holder, next.location, next.note, next.separate_disk, next.enclosure, who, now()).run();
+         retired_at=excluded.retired_at, retired_reason=excluded.retired_reason, updated_by=excluded.updated_by, updated_at=excluded.updated_at`
+    ).bind(uuid, next.tier, next.tier_source, next.holder, next.location, next.note, next.separate_disk, next.enclosure,
+           next.retired_at, next.retired_reason, who, now()).run();
     await audit(env, who, "datentraeger", uuid, changed);
     return { ok: true };
   }

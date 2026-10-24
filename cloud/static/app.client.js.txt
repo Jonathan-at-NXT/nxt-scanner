@@ -258,15 +258,16 @@
     datentraeger() {
       const s = q();
       const list = S.disks.filter((d) => !d.fallback && (!s || [d.name, d.holder, d.location].some((x) => String(x || "").toLowerCase().includes(s))))
-        .filter((d) => ui.disk.tier === "alle" || (ui.disk.tier === "ohne" ? !d.tier : d.tier === ui.disk.tier))
+        .filter((d) => ui.disk.tier === "entfernt" ? d.retired : !d.retired)
+        .filter((d) => ["alle", "entfernt"].includes(ui.disk.tier) || (ui.disk.tier === "ohne" ? !d.tier : d.tier === ui.disk.tier))
 ;
       const sorted = sortBy(list, "disk", { name: (d) => d.name, health: (d) => ({ defekt: 3, warnung: 2, ok: 1, unbekannt: 0 }[d.health?.verdict] ?? null),
         tier: (d) => d.tier, holder: (d) => d.holder, fill: (d) => d.fill,
         free: (d) => d.free_gb, projects: (d) => d.projects, bad: (d) => d.bad_projects, only: (d) => d.only_here_gb, scan: (d) => d.last_scan });
-      const tiers = ["alle", ...S.meta.tiers, "ohne"];
+      const tiers = ["alle", ...S.meta.tiers, "ohne", ...(S.disks.some((d) => d.retired) ? ["entfernt"] : [])];
       return `
       <div class="head"><div><h1>Datenträger</h1><p>Wer welche Platte hat, wie voll sie ist und was darauf liegt. Klick zum Bearbeiten von Stufe, Halter und Standort.</p></div></div>
-      <div class="toolbar">${tiers.map((t) => `<button class="chip ${ui.disk.tier === t ? "on" : ""}" data-tier="${t}">${t === "alle" ? "Alle" : t === "ohne" ? "Ohne Stufe" : t}</button>`).join("")}</div>
+      <div class="toolbar">${tiers.map((t) => `<button class="chip ${ui.disk.tier === t ? "on" : ""}" data-tier="${t}">${t === "alle" ? "Alle" : t === "ohne" ? "Ohne Stufe" : t === "entfernt" ? "Entfernt" : t}</button>`).join("")}</div>
       <table class="table"><thead><tr>${th("disk", "name", "Name")}${th("disk", "health", "Zustand")}${th("disk", "tier", "Stufe")}${th("disk", "holder", "Bei")}${th("disk", "fill", "Füllgrad")}${th("disk", "free", "Frei", "r")}${th("disk", "bad", "Probleme", "r")}${th("disk", "only", "Nur hier", "r hide-m")}${th("disk", "scan", "Letzter Scan", "hide-m")}</tr></thead><tbody>
       ${sorted.map((d) => {
         const cls = d.fill == null ? "" : d.fill > 0.95 ? "full" : d.fill > 0.85 ? "high" : "";
@@ -524,10 +525,31 @@
             <span class="hint">${d.stale ? "Dieser Eintrag ist älter als ein anderer mit gleichem Namen und zählt deshalb gerade nicht als Kopie." : "Neuester Eintrag mit diesem Namen."}</span>` : ""}
           <div class="row"><button class="btn" type="submit">Speichern</button></div>
         </form></div>
+      <div class="block"><h3>Datenträger entfernen</h3>
+        ${d.retired ? `<p class="hint">Entfernt ${rel(d.retired_at)}: <b>${esc(d.retired_reason || "")}</b>. Zählt nirgends mit. Wird die Platte erneut gescannt, ist sie automatisch wieder da.</p>
+          <button class="btn small" id="disk-restore">Wiederherstellen</button>`
+        : `<p class="hint">Für falsch angelegte Einträge, alte Einträge nach Umbenennung/Formatierung oder ausgemusterte Platten. Der Eintrag zählt dann nirgends mehr mit (Kopien, Bilanz, Aufräumen), bleibt aber im Protokoll und lässt sich wiederherstellen. Auf der Platte selbst wird nichts gelöscht.</p>
+          <form class="form" id="disk-retire"><label class="field">Grund
+            <select name="reason">${["Falsch angelegt", "Umbenannt – alter Eintrag", "Neu formatiert – alter Eintrag", "Ausgemustert / entsorgt", "Defekt"].map((r) => `<option>${r}</option>`).join("")}</select></label>
+            <label class="field">Notiz (optional)<input type="text" name="extra" maxlength="200" placeholder="z. B. heißt jetzt NXT 041"></label>
+            <div class="row"><button class="btn small ghost" type="submit">Entfernen</button></div></form>`}
+      </div>
       <div class="block"><h3>Projekte auf dieser Platte (${fmtN(projs.length)})</h3>
         ${projs.slice(0, 300).map((p) => `<div class="copy"><a href="#" data-proj="${esc(p.id)}" class="name">${esc(p.date)} ${esc(p.name)}</a><span>${statusDot(p)}</span>
           <div class="path">${esc(p.types.filter((t) => t.copies.some((c) => c.disk_uuid === uuid)).map((t) => t.type + " " + t.disks + "×").join(" · "))}</div></div>`).join("") || '<div class="muted">Keine gültigen Projektordner.</div>'}
       </div>`);
+    $("#disk-retire")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const reason = [fd.get("reason"), fd.get("extra").trim()].filter(Boolean).join(": ");
+      if (!window.confirm(`„${d.name}“ entfernen? (${reason})`)) return;
+      try { await post("/api/disk", { disk_uuid: uuid, retire: true, retire_reason: reason }); toast("Entfernt"); await load(); render(); diskDrawer(uuid); }
+      catch (err) { toast(err.message, true); }
+    });
+    $("#disk-restore")?.addEventListener("click", async () => {
+      try { await post("/api/disk", { disk_uuid: uuid, retire: false }); toast("Wiederhergestellt"); await load(); render(); diskDrawer(uuid); }
+      catch (err) { toast(err.message, true); }
+    });
     $("#disk-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);

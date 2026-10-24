@@ -74,3 +74,12 @@ test("Typ-Regel: PHOTOS löschbar zählt nicht für gesichert und wird frei", ()
   assert.equal(a.projects[0].level, "ok");
   assert.equal(a.cleanup.phase4.deletable_gb, 400);
 });
+
+test("Entfernter Datenträger zählt nicht, kommt nach neuem Scan zurück", () => {
+  const disks = [disk("A", "VB02"), disk("B", "TOWER 10")];
+  const projects = [proj("A", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 260), proj("B", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 259)];
+  const off = analyze({ disks, projects, diskMeta: [{ disk_uuid: "B", retired_at: "2026-10-25T00:00:00Z", retired_reason: "Falsch angelegt" }] });
+  assert.equal(off.projects[0].types[0].disks, 1);
+  const back = analyze({ disks, projects, diskMeta: [{ disk_uuid: "B", retired_at: "2026-10-01T00:00:00Z", retired_reason: "x" }] });
+  assert.equal(back.projects[0].types[0].disks, 2);
+});

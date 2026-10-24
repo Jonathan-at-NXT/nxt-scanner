@@ -45,15 +45,21 @@ export function buildDisks(disks, metaRows, projects, healthRows = []) {
   // Gleicher Name, mehrere UUIDs: bis jemand bestätigt, dass es getrennte Platten sind,
   // zählt nur der neueste Eintrag (ältere sind oft Neuformatierungen -> sonst Kopie zu viel).
   const newest = new Map();
+  // Entfernt (umkehrbar), solange danach kein neuer Scan kam
+  const isRetired = (d) => {
+    const m = meta.get(d.uuid) || {};
+    return !!m.retired_at && !(d.last_scan && Date.parse(d.last_scan) > Date.parse(m.retired_at));
+  };
   for (const d of disks) {
-    if (d.uuid.startsWith("name:")) continue;
+    if (d.uuid.startsWith("name:") || isRetired(d)) continue;
     const cur = newest.get(d.name);
     if (!cur || (d.last_scan || "") > (cur.last_scan || "")) newest.set(d.name, d);
   }
   return disks.map((d) => {
     const m = meta.get(d.uuid) || {};
     const dup = (byName.get(d.name) || 0) > 1;
-    const stale = dup && newest.get(d.name)?.uuid !== d.uuid && !m.separate_disk;
+    const retired = isRetired(d);
+    const stale = retired || (dup && newest.get(d.name)?.uuid !== d.uuid && !m.separate_disk);
     const tier = m.tier || guessTier(d.name);
     const cap = d.capacity_bytes || null;
     // Plausibilität: statvfs läuft auf macOS bei > 16 TiB über (negative/zu große Werte) → dann used_bytes
@@ -75,6 +81,7 @@ export function buildDisks(disks, metaRows, projects, healthRows = []) {
       duplicate_name: dup, separate_disk: !!m.separate_disk,
       stale,                     // zählt nicht als Kopie, bis als eigene Platte bestätigt
       fallback: d.uuid.startsWith("name:"),
+      retired, retired_at: m.retired_at || null, retired_reason: m.retired_reason || null,
     };
   });
 }
@@ -279,7 +286,7 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
 
   // Flotte: gleiche Namen bei verschiedenen Platten
   const seen = new Map();
-  for (const d of diskList) if (!d.fallback) { if (!seen.has(d.name)) seen.set(d.name, []); seen.get(d.name).push(d); }
+  for (const d of diskList) if (!d.fallback && !d.retired) { if (!seen.has(d.name)) seen.set(d.name, []); seen.get(d.name).push(d); }
   for (const [name, ds] of seen) {
     if (ds.length > 1 && ds.some((d) => d.stale)) add({ key: `DUPLICATE_DISK_NAME|${name}`, type: "DUPLICATE_DISK_NAME", cluster: null, project: null,
       disks: ds.map((d) => d.uuid),
@@ -293,7 +300,7 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
 }
 
 function overview(projects, disks, findings) {
-  const realDisks = disks.filter((d) => !d.fallback);
+  const realDisks = disks.filter((d) => !d.fallback && !d.retired);
   const open = findings.filter((f) => f.status === "offen");
   const byPrio = { kritisch: 0, warnung: 0, info: 0 };
   for (const f of open) byPrio[f.priority]++;
