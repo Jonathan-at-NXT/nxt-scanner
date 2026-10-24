@@ -46,3 +46,11 @@ test("Projekt-Wrapper wird in Typ-Unterordner aufgelöst, Jahreszahl im Namen st
   assert.ok(ps.every((p) => p.type === "FOOTAGE"));
   assert.equal(ps[0].cluster_id, ps[1].cluster_id);
 });
+
+test("gültiger Projektordner in unbenanntem Ordner wird gezählt (Logik wie runDerive)", () => {
+  const parent = classify({ disk_uuid: "T7", rel_path: "ETP ZYPERN" });
+  const child = classify({ disk_uuid: "T7", rel_path: "ETP ZYPERN/2024-03-14_GUCCI SPEC AD_FOOTAGE" });
+  assert.equal(parent.status, "unassigned");
+  assert.equal(child.status, "validated");
+  assert.equal(child.type, "FOOTAGE");
+});
