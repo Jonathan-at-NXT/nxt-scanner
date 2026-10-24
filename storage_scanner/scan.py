@@ -233,8 +233,14 @@ def run_scan(volume_path: str, output_path: str) -> None:
     projects = []
     unassigned = []
     incomplete: list[str] = []
+    # Fortschritt ans Dashboard: Ordner X von Y (Scan-Phase vor der Datei-Erfassung)
+    from .progress import Reporter
+    from .utils import get_volume_uuid
+    rep = Reporter("scan", get_volume_uuid(str(scan_path)) or f"name:{scan_path.name}", scan_path.name,
+                   total_files=len(subfolders), interval=5)
 
-    for folder in subfolders:
+    for i, folder in enumerate(subfolders):
+        rep.update(i, 0, message=f"Ordner {i + 1}/{len(subfolders)}: {folder.name[:60]}")
         try:
             validation = validate_folder(folder.name)
             stats = analyze_folder(folder)
@@ -298,6 +304,7 @@ def run_scan(volume_path: str, output_path: str) -> None:
     if not os.path.ismount(scan_path) and str(scan_path).startswith("/Volumes/"):
         incomplete.append("<Datenträger nicht mehr gemountet>")
 
+    rep.finish(len(subfolders), 0, ok=not incomplete, message=None if not incomplete else f"{len(set(incomplete))} Ordner unvollständig")
     report["scan_info"]["complete"] = not incomplete
     report["scan_info"]["incomplete_folders"] = sorted(set(incomplete))
     if incomplete:

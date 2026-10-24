@@ -540,7 +540,7 @@
       const status = j._stalled ? "keine Meldung seit " + rel(j.updated_at) : j.state === "done" ? "fertig " + rel(j.updated_at) : j.state === "failed" ? "abgebrochen" : "";
       return `<div class="job ${j.state} ${j._stalled ? "failed" : ""}"><div class="top">
         <span><b>${esc(j.disk_name || "?")}</b> · ${esc(KIND[j.kind] || j.kind)} <span class="faint">auf ${esc(j.host || "?")}</span></span>
-        <span class="num muted">${fmtN(j.done_files)}${j.total_files ? ` von ${est ? "" : "~"}${fmtN(j.total_files)}` : ""} Dateien · ${fmtGb((j.done_bytes || 0) / 1e9)}
+        <span class="num muted">${fmtN(j.done_files)}${j.total_files ? ` von ${est || j.kind === "scan" ? "" : "~"}${fmtN(j.total_files)}` : ""} ${j.kind === "scan" ? "Ordner" : "Dateien · " + fmtGb((j.done_bytes || 0) / 1e9)}
           ${pct != null && j.state === "running" && !est ? ` · <b style="color:var(--text)">${Math.round(pct)} %</b>` : ""}${j.state === "running" && !j._stalled && !est ? eta(j, rate) : ""}
           ${status ? " · " + esc(status) : ""}${j.message ? " · " + esc(j.message) : ""}</span></div>
         <div class="bar ${pct == null || est ? (j.state === "running" && !j._stalled ? "indet" : "") : ""}"><span style="width:${j.state === "done" ? 100 : pct ?? 0}%"></span></div></div>`;
