@@ -60,7 +60,7 @@ export function buildDisks(disks, metaRows, projects, healthRows = []) {
     return {
       uuid: d.uuid, name: d.name, tier, tier_source: m.tier ? (m.tier_source || "manual") : (tier ? "guess" : null),
       holder: m.holder || d.last_user || null, holder_source: m.holder ? "manual" : "scan",
-      location: m.location || null, note: m.note || null,
+      location: m.location || null, note: m.note || null, enclosure: m.enclosure || null,
       capacity_gb: cap ? gb(cap) : null, used_gb: used != null ? gb(used) : null,
       free_gb: cap && used != null ? Math.max(0, gb(cap - used)) : null,
       fill: cap && used != null ? Math.min(1, used / cap) : null,
@@ -291,7 +291,7 @@ function overview(projects, disks, findings) {
 // ── Aufräum-Plan ──────────────────────────────────────────────────
 export const STALE_DAYS = 60;        // älter = für den Überblick neu scannen
 const MARGIN = 0.05;                 // Ziele nie über 95 % füllen
-const PORTS = 4;                     // so viele Platten gleichzeitig anschließen
+const PORTS = 3;                     // Anschlüsse; ein Gehäuse mit mehreren Platten belegt nur einen
 export const DEFAULT_RESERVE_MONTHS = 3;   // Platz für neue Drehs, die in dieser Zeit dazukommen (einstellbar)
 
 /**
@@ -314,12 +314,22 @@ export function cleanupPlan(projects, disks, findings, now = Date.now(), reserve
     if (!byHolder.has(h)) byHolder.set(h, []);
     byHolder.get(h).push(d);
   }
-  // Runden: je Halter:in gebündelt, max. PORTS Platten gleichzeitig
+  // Runden: je Halter:in gebündelt, max. PORTS Anschlüsse; Platten eines Gehäuses = ein Anschluss
+  // (dann werden auch die aktuellen Platten des Gehäuses mitgescannt – sie hängen ja eh dran)
   const scanRounds = [];
+  const pack = (d) => ({ uuid: d.uuid, name: d.name, tier: d.tier, enclosure: d.enclosure || null,
+    last_scan: d.last_scan, age_days: Number.isFinite(ageDays(d)) ? Math.round(ageDays(d)) : null });
   for (const [holder, ds] of [...byHolder].sort((a, b) => b[1].length - a[1].length)) {
-    for (let i = 0; i < ds.length; i += PORTS) {
-      scanRounds.push({ holder, disks: ds.slice(i, i + PORTS).map((d) => ({ uuid: d.uuid, name: d.name, tier: d.tier,
-        last_scan: d.last_scan, age_days: Number.isFinite(ageDays(d)) ? Math.round(ageDays(d)) : null })) });
+    const units = new Map();
+    for (const d of ds) {
+      const key = d.enclosure ? `enc:${d.enclosure}` : `disk:${d.uuid}`;
+      if (!units.has(key)) units.set(key, []);
+      units.get(key).push(d);
+    }
+    const list = [...units.values()].sort((a, b) => b.length - a.length);
+    for (let i = 0; i < list.length; i += PORTS) {
+      const group = list.slice(i, i + PORTS);
+      scanRounds.push({ holder, ports: group.length, disks: group.flat().map(pack) });
     }
   }
   const phase1 = { total: real.length + (hasNas ? 0 : 1), fresh: real.length - toScan.length,

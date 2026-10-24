@@ -160,14 +160,15 @@ async function handleWrite(path, body, env, user) {
     if (!uuid) throw new Error("Datenträger fehlt");
     const cur = (await env.DB.prepare("SELECT * FROM disk_meta WHERE disk_uuid=?").bind(uuid).first()) || {};
     const next = { tier: cur.tier ?? null, tier_source: cur.tier_source ?? null, holder: cur.holder ?? null,
-                   location: cur.location ?? null, note: cur.note ?? null, separate_disk: cur.separate_disk ? 1 : 0 };
+                   location: cur.location ?? null, note: cur.note ?? null, separate_disk: cur.separate_disk ? 1 : 0,
+                   enclosure: cur.enclosure ?? null };
     const changed = {};
     if ("tier" in body) {
       if (!TIERS.includes(body.tier)) throw new Error("Bitte eine Speicherstufe wählen");
       if (body.tier !== next.tier || next.tier_source !== "manual") changed.tier = [next.tier, body.tier];
       next.tier = body.tier; next.tier_source = "manual";
     }
-    for (const [f, max] of [["holder", 100], ["location", 200], ["note", 500]]) {
+    for (const [f, max] of [["holder", 100], ["location", 200], ["note", 500], ["enclosure", 100]]) {
       if (f in body) {
         const v = clean(body[f], max);
         if (v !== next[f]) changed[f] = [next[f], v];
@@ -181,12 +182,12 @@ async function handleWrite(path, body, env, user) {
     }
     if (!Object.keys(changed).length) return { ok: true, unchanged: true };
     await env.DB.prepare(
-      `INSERT INTO disk_meta(disk_uuid, tier, tier_source, holder, location, note, separate_disk, updated_by, updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?)
+      `INSERT INTO disk_meta(disk_uuid, tier, tier_source, holder, location, note, separate_disk, enclosure, updated_by, updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(disk_uuid) DO UPDATE SET tier=excluded.tier, tier_source=excluded.tier_source, holder=excluded.holder,
-         location=excluded.location, note=excluded.note, separate_disk=excluded.separate_disk,
+         location=excluded.location, note=excluded.note, separate_disk=excluded.separate_disk, enclosure=excluded.enclosure,
          updated_by=excluded.updated_by, updated_at=excluded.updated_at`
-    ).bind(uuid, next.tier, next.tier_source, next.holder, next.location, next.note, next.separate_disk, who, now()).run();
+    ).bind(uuid, next.tier, next.tier_source, next.holder, next.location, next.note, next.separate_disk, next.enclosure, who, now()).run();
     await audit(env, who, "datentraeger", uuid, changed);
     return { ok: true };
   }

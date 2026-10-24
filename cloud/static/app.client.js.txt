@@ -131,8 +131,8 @@
       <div class="grid two section">
         <div class="panel"><h3>Phase 1 · Nächste Anschluss-Runden (Überblick)</h3>
           ${c.phase1.nas_missing ? `<div class="round"><b>NAS</b> <span class="muted">vollständig erfassen (per Kabel am Sicherungs-Mac oder Intel-Mac)</span></div>` : ""}
-          ${c.phase1.rounds.length ? c.phase1.rounds.slice(0, 6).map((r, i) => `<div class="round"><div><b>Runde ${i + 1}</b> <span class="muted">· bei ${esc(r.holder)} · bis zu ${c.ports} gleichzeitig anstecken</span></div>
-            <div class="disks">${r.disks.map((d) => `<a href="#" data-disk="${esc(d.uuid)}" class="tc">${tierBadge(d.tier)} ${esc(d.name)} <span class="faint">${d.age_days == null ? "nie" : d.age_days + " T"}</span></a>`).join("")}</div></div>`).join("")
+          ${c.phase1.rounds.length ? c.phase1.rounds.slice(0, 6).map((r, i) => `<div class="round"><div><b>Runde ${i + 1}</b> <span class="muted">· bei ${esc(r.holder)} · ${r.ports} von ${c.ports} Anschlüssen</span></div>
+            <div class="disks">${r.disks.map((d) => `<a href="#" data-disk="${esc(d.uuid)}" class="tc">${tierBadge(d.tier)} ${esc(d.name)}${d.enclosure ? ` <span class="faint">[${esc(d.enclosure)}]</span>` : ""} <span class="faint">${d.age_days == null ? "nie" : d.age_days + " T"}</span></a>`).join("")}</div></div>`).join("")
             + (c.phase1.rounds.length > 6 ? `<p class="hint">+ ${c.phase1.rounds.length - 6} weitere Runden</p>` : "")
             : `<div class="muted">Alle Platten sind aktuell (≤ ${c.stale_days} Tage).</div>`}
           <p class="hint">Einfach anstecken: Der Scanner erfasst die Platte automatisch, das Dashboard aktualisiert sich innerhalb von 15 Minuten.</p>
@@ -394,6 +394,9 @@
           <label class="field">Wer hat sie<input type="text" name="holder" maxlength="100" value="${esc(d.holder || "")}" placeholder="Name">
             ${d.holder_source === "scan" && d.holder ? '<span class="hint">aus dem letzten Scan</span>' : ""}</label>
           <label class="field">Standort<input type="text" name="location" maxlength="200" value="${esc(d.location || "")}" placeholder="z. B. Regal B3, Büro, extern bei Jonathan"></label>
+          <label class="field">Gehäuse <span class="hint">Platten mit gleichem Gehäuse-Namen hängen gemeinsam an einem Anschluss (z. B. „NH-Gehäuse“)</span>
+            <input type="text" name="enclosure" maxlength="100" list="enclist" value="${esc(d.enclosure || "")}" placeholder="leer = einzeln angeschlossen">
+            <datalist id="enclist">${[...new Set(S.disks.map((x) => x.enclosure).filter(Boolean))].map((e) => `<option value="${esc(e)}">`).join("")}</datalist></label>
           <label class="field">Notiz<input type="text" name="note" maxlength="500" value="${esc(d.note || "")}"></label>
           ${d.duplicate_name ? `<div class="checks"><label><input type="checkbox" name="separate" ${d.separate_disk ? "checked" : ""}> Eigene physische Platte (trotz gleichem Namen als Kopie zählen)</label></div>
             <span class="hint">${d.stale ? "Dieser Eintrag ist älter als ein anderer mit gleichem Namen und zählt deshalb gerade nicht als Kopie." : "Neuester Eintrag mit diesem Namen."}</span>` : ""}
@@ -406,8 +409,9 @@
     $("#disk-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const changes = diff({ tier: d.tier || "", holder: d.holder || "", location: d.location || "", note: d.note || "", separate_disk: !!d.separate_disk },
+      const changes = diff({ tier: d.tier || "", holder: d.holder || "", location: d.location || "", note: d.note || "", separate_disk: !!d.separate_disk, enclosure: d.enclosure || "" },
                            { tier: fd.get("tier") || "", holder: fd.get("holder").trim(), location: fd.get("location").trim(), note: fd.get("note").trim(),
+                             enclosure: fd.get("enclosure").trim(),
                              separate_disk: d.duplicate_name ? fd.get("separate") === "on" : !!d.separate_disk });
       if (fd.get("confirm_tier") === "on" && fd.get("tier")) changes.tier = fd.get("tier");
       if ("tier" in changes && !changes.tier) delete changes.tier;   // nie auf "nichts" setzen

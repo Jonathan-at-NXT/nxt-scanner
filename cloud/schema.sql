@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS disk_meta (
     location TEXT,
     note TEXT,
     separate_disk INTEGER,       -- 1 = trotz gleichem Namen eigene physische Platte (zählt als Kopie)
+    enclosure TEXT,              -- Gehäuse: mehrere Platten an einem Anschluss
     updated_by TEXT,
     updated_at TEXT
 );
