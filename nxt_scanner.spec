@@ -132,3 +132,20 @@ app = BUNDLE(
         'NSRequiresAquaSystemAppearance': False,
     },
 )
+
+# ── Nachbearbeitung: eigene libexpat ───────────────────────────────
+# Homebrew-Python baut pyexpat für das macOS des Build-Rechners; auf älterem macOS fehlt der
+# System-libexpat dann ein Symbol (_XML_SetAllocTrackerActivationThreshold) und die App startet
+# nicht. Darum eine eigene libexpat mitliefern und pyexpat darauf zeigen lassen.
+import glob, shutil, subprocess
+_expat = '/opt/homebrew/opt/expat/lib/libexpat.1.dylib'
+_fw = os.path.join(DISTPATH, 'NXT Scanner.app', 'Contents', 'Frameworks')
+if not os.path.exists(_expat):
+    raise SystemExit('libexpat fehlt: brew install expat')
+shutil.copy2(os.path.realpath(_expat), os.path.join(_fw, 'libexpat.1.dylib'))
+os.chmod(os.path.join(_fw, 'libexpat.1.dylib'), 0o755)
+subprocess.run(['install_name_tool', '-id', '@rpath/libexpat.1.dylib', os.path.join(_fw, 'libexpat.1.dylib')], check=True)
+for _so in {os.path.realpath(p) for p in glob.glob(os.path.join(_fw, '**', 'pyexpat*.so'), recursive=True)}:
+    _rel = os.path.relpath(_fw, os.path.dirname(_so))
+    subprocess.run(['install_name_tool', '-change', '/usr/lib/libexpat.1.dylib',
+                    f'@loader_path/{_rel}/libexpat.1.dylib', _so], check=True)
