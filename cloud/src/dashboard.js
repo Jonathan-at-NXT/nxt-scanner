@@ -13,6 +13,7 @@
  */
 
 import { verifyAccess, devUser } from "./access.js";
+import { legacyProjects, LEGACY_DECISIONS } from "./legacy.js";
 import { analyze, SICHERUNG, TIERS, DEFAULT_RESERVE_MONTHS } from "./analysis.js";
 import { runDerive } from "./derive.js";
 import { validateFolder } from "./notion_sync.js";
@@ -155,6 +156,24 @@ async function handleWrite(path, body, env, user) {
     return { ok: true };
   }
   // Sammel-Entscheidung: nur die Sicherungsstufe vieler Projekte setzen (Stufen/Notiz bleiben)
+  // Altprojekte: Entscheidung (aussortieren | behalten | ansehen | null) und Notiz, protokolliert
+  if (path === "/api/legacy") {
+    const key = clean(body.key, 200);
+    if (!key) throw new Error("Projekt fehlt");
+    const cur = (await env.DB.prepare("SELECT * FROM legacy_decision WHERE key=?").bind(key).first()) || {};
+    const next = { decision: cur.decision || null, note: cur.note || null };
+    if ("decision" in body) {
+      if (body.decision != null && !(body.decision in LEGACY_DECISIONS)) throw new Error("Unbekannte Entscheidung");
+      next.decision = body.decision || null;
+    }
+    if ("note" in body) next.note = clean(body.note);
+    if (next.decision === (cur.decision || null) && next.note === (cur.note || null)) return { ok: true, unchanged: true };
+    await env.DB.prepare(`INSERT INTO legacy_decision(key, decision, note, updated_by, updated_at) VALUES(?,?,?,?,?)
+      ON CONFLICT(key) DO UPDATE SET decision=excluded.decision, note=excluded.note, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
+      .bind(key, next.decision, next.note, who, now()).run();
+    await audit(env, who, "altprojekt", key, { decision: [cur.decision || null, next.decision], note: [cur.note || null, next.note] });
+    return { ok: true };
+  }
   if (path === "/api/rules/bulk") {
     const keys = [...new Set((Array.isArray(body.rule_keys) ? body.rule_keys : []).map((k) => clean(k, 300)).filter(Boolean))];
     if (!keys.length || keys.length > 1000) throw new Error("1 bis 1000 Projekte auswählen");
@@ -281,6 +300,18 @@ export default {
         const stale = (await env.DB.prepare(
           "SELECT * FROM job_progress WHERE state='running' AND julianday(updated_at) < julianday('now','-3 minutes') AND julianday(updated_at) >= julianday('now','-30 minutes')").all()).results || [];
         return json({ jobs: rows, stalled: stale });
+      }
+      if (url.pathname === "/api/legacy") {
+        const [rows, disks, dec] = await Promise.all([
+          env.DB.prepare(`SELECT disk_uuid, rel_path, size_bytes, file_count FROM folder_tree
+                          WHERE depth<=3 AND (rel_path GLOB '[0-9]*' OR rel_path GLOB '*/[0-9]*')`).all().then((r) => r.results || []),
+          env.DB.prepare("SELECT uuid, name, last_scan FROM disks").all().then((r) => r.results || []),
+          env.DB.prepare("SELECT * FROM legacy_decision").all().then((r) => r.results || []),
+        ]);
+        const byKey = new Map(dec.map((d) => [d.key, d]));
+        const items = legacyProjects(rows, disks).map((g) => ({ ...g, decision: byKey.get(g.key)?.decision || null,
+          note: byKey.get(g.key)?.note || null, decided_by: byKey.get(g.key)?.updated_by || null }));
+        return json({ items, decisions: LEGACY_DECISIONS });
       }
       if (url.pathname === "/api/audit") {
         const rows = (await env.DB.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 300").all()).results || [];
