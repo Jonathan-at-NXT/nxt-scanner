@@ -22,12 +22,36 @@ AUTO_SCAN_PATTERNS = [
     re.compile(r"^nxt\s+\d+$", re.IGNORECASE),       # NXT 005, nxt 007, ...
     re.compile(r"^tower\s+\d+$", re.IGNORECASE),      # TOWER 1, Tower 2, ...
     re.compile(r"^nxt\s+hub\s+\d+$", re.IGNORECASE),  # NXT HUB 1, nxt hub 2, ...
+    re.compile(r"^n[hb]\s+\d+$", re.IGNORECASE),        # NH 01, NB 01 (Mehrfach-Gehäuse)
 ]
 
 
+def _is_physical_local(name: str) -> bool:
+    """Echte, lokal angeschlossene Platte (kein Netzlaufwerk, kein Disk-Image)."""
+    import plistlib
+    import subprocess
+    try:
+        r = subprocess.run(["diskutil", "info", "-plist", f"/Volumes/{name}"], capture_output=True, timeout=20)
+        info = plistlib.loads(r.stdout) if r.returncode == 0 else {}
+    except Exception:  # noqa: BLE001
+        return False
+    if not info or info.get("VirtualOrPhysical") == "Virtual" or info.get("Internal"):
+        return False
+    return (info.get("BusProtocol") or "") not in ("Disk Image", "")
+
+
 def is_auto_scan_volume(name: str) -> bool:
-    """Prüft ob ein Volume automatisch gescannt werden soll."""
-    return any(p.match(name) for p in AUTO_SCAN_PATTERNS)
+    """Prüft ob ein Volume automatisch gescannt werden soll. Mit `auto_scan_all` in der
+    Config (Sicherungs-Mac) zählt jede echte externe Platte, nicht nur die Namensmuster."""
+    if any(p.match(name) for p in AUTO_SCAN_PATTERNS):
+        return True
+    try:
+        from .notion_sync import load_config
+        if load_config().get("auto_scan_all"):
+            return _is_physical_local(name)
+    except Exception:  # noqa: BLE001
+        pass
+    return False
 
 logging.basicConfig(
     filename=str(LOG_PATH),

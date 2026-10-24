@@ -61,3 +61,19 @@ def test_find_count_ok_on_normal_folder(tmp_path):
     (tmp_path / "a").write_bytes(b"1")
     (tmp_path / "b").write_bytes(b"2")
     assert analyzer._find_count(str(tmp_path)) == 2
+
+
+def test_auto_scan_patterns_include_enclosures(monkeypatch):
+    from storage_scanner import auto_scan
+    monkeypatch.setattr("storage_scanner.notion_sync.load_config", lambda: {})
+    for n in ["NXT 012", "TOWER 7", "NXT HUB 05", "NH 01", "nb 02"]:
+        assert auto_scan.is_auto_scan_volume(n), n
+    assert not auto_scan.is_auto_scan_volume("LaCie")
+
+
+def test_auto_scan_all_only_physical(monkeypatch):
+    from storage_scanner import auto_scan
+    monkeypatch.setattr("storage_scanner.notion_sync.load_config", lambda: {"auto_scan_all": True})
+    monkeypatch.setattr(auto_scan, "_is_physical_local", lambda n: n == "LaCie")
+    assert auto_scan.is_auto_scan_volume("LaCie")
+    assert not auto_scan.is_auto_scan_volume("Blackmagic DaVinci Resolve Studio")
