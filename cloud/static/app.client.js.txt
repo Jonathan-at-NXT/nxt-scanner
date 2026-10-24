@@ -7,11 +7,16 @@
     : g.toLocaleString("de-DE", { maximumFractionDigits: g < 10 ? 1 : 0 }) + " GB");
   const fmtTb = (t) => (t ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " TB";
   const fmtN = (n) => (n ?? 0).toLocaleString("de-DE");
+  // Zeitpunkt mit Uhrzeit: "heute 15:40", "gestern 09:12", sonst "21.10.26, 14:03"
   const rel = (iso) => {
     if (!iso) return "nie";
-    const d = (Date.now() - Date.parse(iso)) / 86400000;
-    if (d < 1) return "heute"; if (d < 2) return "gestern"; if (d < 60) return `vor ${Math.floor(d)} Tagen`;
-    return new Date(iso).toLocaleDateString("de-DE");
+    const t = new Date(iso); if (Number.isNaN(t.getTime())) return "–";
+    const hm = t.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+    const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diff = Math.round((day(new Date()) - day(t)) / 86400000);
+    if (diff === 0) return `heute ${hm}`;
+    if (diff === 1) return `gestern ${hm}`;
+    return `${t.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" })}, ${hm}`;
   };
   const TYPE_LABEL = { MISSING_BACKUP: "Nur 1× gesichert", TIER_MISSING: "Pflicht-Stufe fehlt", SIZE_MISMATCH: "Größe weicht ab",
     INCOMPLETE_BACKUP: "Kopie unvollständig", EXCESS_COPIES: "Zu viele Kopien", PARTIAL_COPY: "Teilkopie überflüssig", REF_EXTRA: "Mehr als Sollstand", UMBENENNEN: "Umbenennen", DUPLICATE_DISK_NAME: "Name doppelt",
