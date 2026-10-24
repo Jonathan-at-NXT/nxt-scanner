@@ -280,3 +280,24 @@ def test_disk_usage_fixes_statvfs_overflow(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: type("R", (), {"stdout": plist})())
     d = report._disk_usage("/Volumes/X")
     assert d["total_bytes"] == 18000000000000 and d["used_bytes"] == 18000000000000 - 1752634634240
+
+
+def test_inventory_handles_exfat_inode_above_int64(tmp_path, monkeypatch):
+    vol = tmp_path / "vol"
+    _write(vol, "P/a.mov", b"x" * 10)
+    real_walk = catalog.walk_files
+
+    def walk(root, errors):
+        for rel, st in real_walk(root, errors):
+            class S:
+                pass
+            s = S()
+            for k in ("st_size", "st_mtime", "st_mode"):
+                setattr(s, k, getattr(st, k))
+            s.st_ino = 18446744073709551481
+            yield rel, s
+    monkeypatch.setattr(catalog, "walk_files", walk)
+    monkeypatch.setattr(catalog, "volume_info", lambda m, serials=None: _vol("U7", "VB01"))
+    conn = catalog.connect(":memory:")
+    assert catalog.inventory(str(vol), conn)["complete"]
+    assert conn.execute("SELECT inode FROM file").fetchone()[0] < 0

@@ -290,16 +290,18 @@ def inventory(mount: str, conn: sqlite3.Connection, vol: dict | None = None,
         stats["bytes"] += st.st_size
         mtime = round(st.st_mtime, 3)
         birth = getattr(st, "st_birthtime", None)
+        # exFAT liefert teils Dateinummern >= 2**63 (uint64); SQLite-INTEGER ist int64 → als signed speichern
+        ino = st.st_ino - (1 << 64) if st.st_ino >= (1 << 63) else st.st_ino
         old = existing.get(rel)
         if old is None:
             name = os.path.basename(rel)
             ext, kind = classify(name)
-            batch_new.append((uuid, rel, name, ext, kind, st.st_size, mtime, birth, st.st_ino,
+            batch_new.append((uuid, rel, name, ext, kind, st.st_size, mtime, birth, ino,
                               now, now, now))
             stats["added"] += 1
         elif old[0] != st.st_size or old[1] != mtime or not old[3]:
             # Inhalt geändert oder wieder aufgetaucht -> Fingerprint neu
-            batch_upd.append((st.st_size, mtime, birth, st.st_ino, now, now, uuid, rel))
+            batch_upd.append((st.st_size, mtime, birth, ino, now, now, uuid, rel))
             stats["changed"] += 1
         else:
             batch_touch.append((now, uuid, rel))
