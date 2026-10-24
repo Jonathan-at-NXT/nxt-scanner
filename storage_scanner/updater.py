@@ -28,6 +28,13 @@ _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 def _get_arch_suffix() -> str:
     """Gibt den Architektur-Suffix für den ZIP-Dateinamen zurück."""
+    # Echte Hardware statt platform.machine(): eine Intel-Variante unter Rosetta meldet sonst x86_64
+    try:
+        out = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True, text=True, timeout=5).stdout.strip()
+        if out == "1":
+            return "arm64"
+    except Exception:  # noqa: BLE001
+        pass
     machine = platform.machine().lower()
     if machine in ("x86_64", "i386"):
         return "x86_64"
