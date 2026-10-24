@@ -6,7 +6,10 @@ const DATED = /^\d{4}/;
 const SUB = new Set(["EXPORT", "EXPORTS", "PHOTOS", "PHOTO", "ASSETS", "AUDIO", "RESOLVE", "LOGO", "LOGOS", "SOFTWARE", "FOOTAGE",
   "RAW", "PREMIERE", "LIGHTROOM", "SOUND", "VIDEO", "VIDEOS", "MUSIK", "MUSIC", "GRAFIK", "GRAFIKEN", "SCRIPT", "PROJEKT", "PROJECT",
   "DOKUMENTE", "DOCS", "FONTS", "PROXY", "PROXIES", "PROXYS", "RENDER", "RENDERS", "CUT", "EDIT", "COLOR", "VFX", "AE", "AFTER EFFECTS",
-  "DAVINCI", "FCP", "STILLS", "BILDER", "TEXT", "SFX", "GFX", "INPUT", "OUTPUT", "BACKUP", "OFFLINE", "ROHMATERIAL", "ARCHIV"]);
+  "DAVINCI", "FCP", "STILLS", "BILDER", "TEXT", "SFX", "GFX", "INPUT", "OUTPUT", "BACKUP", "OFFLINE", "ROHMATERIAL", "ARCHIV",
+  "CLEANCUTS", "INTERMEDIATES", "OVERLAYS", "PROJECTS", "TIMELINES", "TIMELINE"]);
+// Schnitt-/Exportstrukturen ("2-TIMELINE-EXPORTS_PRORES") sind keine Altprojekte
+const STRUCT = /^(TIMELINE|EXPORT|RENDER|PRORES|PROXY|INTERMEDIATE|OVERLAY|CLEANCUT)/;
 export const MIN_GB = 5;
 const normName = (s) => s.toUpperCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^A-Z0-9]/g, "").slice(0, 12);
 
@@ -27,7 +30,7 @@ export function legacyProjects(rows, disks) {
     const m = PAT.exec(name);
     if (!m) continue;
     const rest = m[2].trim().toUpperCase();
-    if (SUB.has(rest) || /^(TAG|DAY|CAM|KAMERA|CARD|KARTE|[A-D])\s*\d*$/.test(rest) || /^\d+$/.test(rest)) continue;
+    if (SUB.has(rest) || STRUCT.test(rest) || /^(TAG|DAY|CAM|KAMERA|CARD|KARTE|[A-D])\s*\d*$/.test(rest) || /^\d+$/.test(rest)) continue;
     if (parts.slice(0, -1).some((p) => DATED.test(p) || PAT.test(p.trim()))) continue;
     hits.push({ ...r, num: Number(m[1]), title: m[2].trim() });
   }
@@ -52,4 +55,4 @@ export function legacyProjects(rows, disks) {
   return out.sort((a, b) => a.num - b.num);
 }
 
-export const LEGACY_DECISIONS = { aussortieren: "Aussortieren", behalten: "Behalten", ansehen: "Nochmal ansehen" };
+export const LEGACY_DECISIONS = { aussortieren: "Aussortieren", behalten: "Behalten", ansehen: "Nochmal ansehen", kein: "Kein Altprojekt" };
