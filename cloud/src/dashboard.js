@@ -245,9 +245,10 @@ export default {
         // laufend (Meldung < 3 min alt) oder in der letzten Stunde beendet
         const rows = (await env.DB.prepare(
           `SELECT * FROM job_progress WHERE (state='running' AND updated_at >= datetime('now','-3 minutes'))
-             OR (state<>'running' AND updated_at >= datetime('now','-60 minutes')) ORDER BY state='running' DESC, updated_at DESC`).all()).results || [];
+             OR (state<>'running' AND updated_at >= datetime('now','-5 minutes')) ORDER BY state='running' DESC, updated_at DESC`).all()).results || [];
+        // hängengebliebene Jobs nur 30 min zeigen (danach gelten sie als abgebrochen)
         const stale = (await env.DB.prepare(
-          "SELECT * FROM job_progress WHERE state='running' AND updated_at < datetime('now','-3 minutes') AND updated_at >= datetime('now','-2 hours')").all()).results || [];
+          "SELECT * FROM job_progress WHERE state='running' AND updated_at < datetime('now','-3 minutes') AND updated_at >= datetime('now','-30 minutes')").all()).results || [];
         return json({ jobs: rows, stalled: stale });
       }
       if (url.pathname === "/api/audit") {
