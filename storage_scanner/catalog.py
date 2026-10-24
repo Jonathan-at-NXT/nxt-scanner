@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS run (
 );
 """
 
+# macOS-Systemordner mit Varianten-Namen (z. B. ".DocumentRevisions-V100-bad-1")
+_SKIP_PREFIXES = (".DocumentRevisions-V100", ".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems", ".MobileBackups")
+
 # Systemordner/-dateien, die nie Footage sind
 _SKIP_DIRS = {
     ".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems",
@@ -224,7 +227,7 @@ def walk_files(root: Path, errors: list):
             continue
         for e in entries:
             n = e.name
-            if n in _SKIP_DIRS or n.startswith("._") or n.endswith(".tmp"):
+            if n in _SKIP_DIRS or n.startswith("._") or n.endswith(".tmp") or n.startswith(_SKIP_PREFIXES):
                 continue
             try:
                 if e.is_dir(follow_symlinks=False):

@@ -232,3 +232,11 @@ def test_vanished_files_are_not_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(catalog.os, "scandir", Ctx)
     r = catalog.inventory(str(tmp_path), conn, vol=_vol())
     assert r["complete"] and r["files"] == 1 and r["errors"] == 0
+
+
+def test_system_folder_variants_are_skipped(tmp_path):
+    _write(tmp_path, ".DocumentRevisions-V100-bad-1/x.db")
+    _write(tmp_path, "P/a.mp4")
+    conn = catalog.connect(":memory:")
+    r = catalog.inventory(str(tmp_path), conn, vol=_vol())
+    assert r["files"] == 1 and r["complete"]
