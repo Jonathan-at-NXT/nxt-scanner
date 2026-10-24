@@ -13,7 +13,7 @@
  */
 
 import { verifyAccess, devUser } from "./access.js";
-import { legacyProjects, LEGACY_DECISIONS } from "./legacy.js";
+import { legacyProjects, oldProjects, LEGACY_DECISIONS, CUTOFF_YEAR } from "./legacy.js";
 import { analyze, SICHERUNG, TIERS, DEFAULT_RESERVE_MONTHS } from "./analysis.js";
 import { runDerive } from "./derive.js";
 import { validateFolder } from "./notion_sync.js";
@@ -46,6 +46,38 @@ async function audit(env, who, action, target, detail) {
     .bind(now(), who, action, target, JSON.stringify(detail)).run();
 }
 
+// Altprojekte: Nils' Nummern-Ordner + Projekte bis CUTOFF_YEAR, mit Entscheidungen
+async function loadLegacy(env, projects = null) {
+  const [rows, disks, dec, prj] = await Promise.all([
+    env.DB.prepare(`SELECT disk_uuid, rel_path, size_bytes, file_count FROM folder_tree
+                    WHERE depth<=3 AND (rel_path GLOB '[0-9]*' OR rel_path GLOB '*/[0-9]*')`).all().then((r) => r.results || []),
+    env.DB.prepare("SELECT uuid, name, last_scan FROM disks").all().then((r) => r.results || []),
+    env.DB.prepare("SELECT * FROM legacy_decision").all().then((r) => r.results || []),
+    projects ? Promise.resolve(projects)
+      : env.DB.prepare("SELECT disk_uuid, rel_path, date, project_name, status, size_bytes, cluster_id FROM projects").all().then((r) => r.results || []),
+  ]);
+  const byKey = new Map(dec.map((d) => [d.key, d]));
+  const items = [...legacyProjects(rows, disks).map((g) => ({ ...g, source: "nummer" })), ...oldProjects(prj, disks)]
+    .map((g) => ({ ...g, decision: byKey.get(g.key)?.decision || null, note: byKey.get(g.key)?.note || null,
+                   decided_by: byKey.get(g.key)?.updated_by || null }));
+  return items;
+}
+
+// Vorschläge aus dem Inhalts-Abgleich als gedachte Zuordnung: Projektzeilen umhängen bzw. ergänzen
+function applySuggestions(projects, suggestions) {
+  const tpl = new Map();
+  for (const p of projects) if (p.cluster_id && !tpl.has(p.cluster_id)) tpl.set(p.cluster_id, p);
+  const sk = new Map(suggestions.map((s) => [`${s.disk_uuid}|${s.rel_path}`, s]));
+  const out = projects.filter((p) => !sk.has(`${p.disk_uuid}|${p.rel_path}`));
+  for (const s of suggestions) {
+    const t = tpl.get(s.target_cluster);
+    if (!t) continue;
+    out.push({ ...t, disk_uuid: s.disk_uuid, rel_path: s.rel_path, name: s.rel_path.split("/").pop(), type: s.target_type,
+               status: "validated", size_bytes: s.size_bytes, file_count: null, soll_name: s.soll_name });
+  }
+  return out;
+}
+
 async function loadState(env) {
   const q = (sql) => env.DB.prepare(sql).all().then((r) => r.results || []);
   const [projects, disks, diskMeta, rules, states, overrides, health] = await Promise.all([
@@ -57,7 +89,19 @@ async function loadState(env) {
   ]);
   const rm = await env.DB.prepare("SELECT value FROM meta WHERE key='cleanup_reserve_months'").first();
   const reserveMonths = rm ? Number(rm.value) : DEFAULT_RESERVE_MONTHS;
-  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths });
+  const legacy = await loadLegacy(env, projects);
+  const legacyGb = legacy.filter((x) => x.source === "nummer" && x.decision === "aussortieren").reduce((s, x) => s + x.total_gb, 0);
+  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths, legacyGb });
+  // Vorschläge aus dem Inhalts-Abgleich: offen und noch ohne Soll-Name
+  const ovKeys = new Set(overrides.map((o) => `${o.disk_uuid}|${o.rel_path}`));
+  const sugg = (await q("SELECT * FROM content_suggestion WHERE status='offen'")).filter((s) => !ovKeys.has(`${s.disk_uuid}|${s.rel_path}`));
+  const dn = new Map(disks.map((d) => [d.uuid, d.name]));
+  a.suggestions = sugg.map((s) => ({ ...s, disk: dn.get(s.disk_uuid) || "?" })).sort((x, y) => y.shared_gb - x.shared_gb);
+  if (sugg.length) {
+    const b = analyze({ projects: applySuggestions(projects, sugg), disks, diskMeta, rules, states, health, reserveMonths, legacyGb });
+    const lv = (r) => Object.fromEntries(["einfach", "teilweise", "ok", "mehrfach"].map((k) => [k, r.projects.filter((p) => p.level === k).length]));
+    a.cleanup.with_suggestions = { count: sugg.length, balance: b.cleanup.balance, levels: lv(b), levels_now: lv(a) };
+  }
   // Ordner ohne gültigen Namen (Kandidaten für Soll-Namen), mit Platte
   const diskName = new Map(disks.map((d) => [d.uuid, d.name]));
   const ov = new Map(overrides.map((o) => [`${o.disk_uuid}|${o.rel_path}`, o]));
@@ -172,6 +216,36 @@ async function handleWrite(path, body, env, user) {
       ON CONFLICT(key) DO UPDATE SET decision=excluded.decision, note=excluded.note, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
       .bind(key, next.decision, next.note, who, now()).run();
     await audit(env, who, "altprojekt", key, { decision: [cur.decision || null, next.decision], note: [cur.note || null, next.note] });
+    // Altprojekt aus der Projektliste: Aussortieren = Sicherung "Löschbar", Behalten = "Doppelt"
+    if (key.startsWith("p|") && "decision" in body && next.decision !== (cur.decision || null)) {
+      const rk = key.slice(2);
+      const rule = (await env.DB.prepare("SELECT sicherung FROM project_rule WHERE rule_key=?").bind(rk).first()) || {};
+      const want = next.decision === "aussortieren" ? "loeschbar" : next.decision === "behalten" ? "doppelt"
+        : rule.sicherung === "loeschbar" && cur.decision === "aussortieren" ? "doppelt" : null;
+      if (want && want !== rule.sicherung) {
+        await env.DB.prepare(`INSERT INTO project_rule(rule_key, sicherung, require_tiers, note, updated_by, updated_at) VALUES(?,?,'',NULL,?,?)
+          ON CONFLICT(rule_key) DO UPDATE SET sicherung=excluded.sicherung, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
+          .bind(rk, want, who, now()).run();
+        await audit(env, who, "regel", rk, { sicherung: [rule.sicherung || null, want], via: "Altprojekte" });
+      }
+    }
+    return { ok: true };
+  }
+  // Vorschlag aus dem Inhalts-Abgleich: übernehmen (setzt Soll-Name) oder verwerfen
+  if (path === "/api/suggestion") {
+    const uuid = clean(body.disk_uuid, 100), rel = body.rel_path == null ? null : String(body.rel_path).slice(0, 1000);
+    const s = await env.DB.prepare("SELECT * FROM content_suggestion WHERE disk_uuid=? AND rel_path=?").bind(uuid, rel).first();
+    if (!s) throw new Error("Vorschlag nicht gefunden");
+    if (body.action === "uebernehmen") {
+      await env.DB.prepare(`INSERT INTO folder_override(disk_uuid, rel_path, soll_name, updated_by, updated_at) VALUES(?,?,?,?,?)
+        ON CONFLICT(disk_uuid, rel_path) DO UPDATE SET soll_name=excluded.soll_name, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
+        .bind(uuid, rel, s.soll_name, who, now()).run();
+      await audit(env, who, "soll_name", `${uuid}|${rel}`, { soll_name: s.soll_name, via: "Inhalts-Abgleich" });
+    } else if (body.action !== "verwerfen") throw new Error("Unbekannte Aktion");
+    await env.DB.prepare("UPDATE content_suggestion SET status=?, decided_by=?, decided_at=? WHERE disk_uuid=? AND rel_path=?")
+      .bind(body.action === "uebernehmen" ? "uebernommen" : "verworfen", who, now(), uuid, rel).run();
+    if (body.action === "verwerfen") await audit(env, who, "vorschlag", `${uuid}|${rel}`, { verworfen: s.soll_name });
+    if (body.action === "uebernehmen" && !body.no_derive) await runDerive(env);
     return { ok: true };
   }
   if (path === "/api/rules/bulk") {
@@ -302,16 +376,7 @@ export default {
         return json({ jobs: rows, stalled: stale });
       }
       if (url.pathname === "/api/legacy") {
-        const [rows, disks, dec] = await Promise.all([
-          env.DB.prepare(`SELECT disk_uuid, rel_path, size_bytes, file_count FROM folder_tree
-                          WHERE depth<=3 AND (rel_path GLOB '[0-9]*' OR rel_path GLOB '*/[0-9]*')`).all().then((r) => r.results || []),
-          env.DB.prepare("SELECT uuid, name, last_scan FROM disks").all().then((r) => r.results || []),
-          env.DB.prepare("SELECT * FROM legacy_decision").all().then((r) => r.results || []),
-        ]);
-        const byKey = new Map(dec.map((d) => [d.key, d]));
-        const items = legacyProjects(rows, disks).map((g) => ({ ...g, decision: byKey.get(g.key)?.decision || null,
-          note: byKey.get(g.key)?.note || null, decided_by: byKey.get(g.key)?.updated_by || null }));
-        return json({ items, decisions: LEGACY_DECISIONS });
+        return json({ items: await loadLegacy(env), decisions: LEGACY_DECISIONS, cutoff_year: CUTOFF_YEAR });
       }
       if (url.pathname === "/api/audit") {
         const rows = (await env.DB.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 300").all()).results || [];

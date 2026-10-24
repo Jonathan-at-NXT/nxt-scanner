@@ -80,7 +80,7 @@ export function buildDisks(disks, metaRows, projects, healthRows = []) {
 }
 
 /** Projekte je Cluster inkl. Regel, Kopien je Typ, Befunde. */
-export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS }) {
+export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0 }) {
   const diskList = buildDisks(disks, diskMeta, projects, health);
   const disk = new Map(diskList.map((d) => [d.uuid, d]));
   const ruleBy = new Map(rules.map((r) => [r.rule_key, r]));
@@ -289,7 +289,7 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
 
   out.sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.name.localeCompare(b.name));
   return { projects: out, disks: diskList, findings, overview: overview(out, diskList, findings),
-           cleanup: cleanupPlan(out, diskList, findings, Date.now(), reserveMonths) };
+           cleanup: cleanupPlan(out, diskList, findings, Date.now(), reserveMonths, legacyGb) };
 }
 
 function overview(projects, disks, findings) {
@@ -352,7 +352,7 @@ export const DEFAULT_RESERVE_MONTHS = 3;   // Platz für neue Drehs, die in dies
  * 3 Vervollständigen: Kopieraufgaben (nur entschiedene 2×/3×-Projekte), gebündelt in Anschluss-Runden
  * 4 Freigeben: Platz aus überzähligen Kopien und "Löschbar"-Projekten
  */
-export function cleanupPlan(projects, disks, findings, now = Date.now(), reserveMonths = DEFAULT_RESERVE_MONTHS) {
+export function cleanupPlan(projects, disks, findings, now = Date.now(), reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0) {
   const real = disks.filter((d) => !d.fallback && !d.stale);
   const ageDays = (d) => (d.last_scan ? (now - Date.parse(d.last_scan)) / 86400000 : Infinity);
 
@@ -448,8 +448,8 @@ export function cleanupPlan(projects, disks, findings, now = Date.now(), reserve
   const singleExtraGb = projects.reduce((s, p) => s + p.types.filter((t) => t.sicherung === "einfach")
     .reduce((x, t) => x + Math.max(0, t.disks - 1) * t.size_gb, 0), 0);
   const phase4 = { excess_gb: round(excessGb), partial_gb: round(partialGb), ref_extra_gb: round(refExtraGb),
-                   deletable_gb: round(deletableGb), single_extra_gb: round(singleExtraGb),
-                   total_gb: round(excessGb + partialGb + refExtraGb + deletableGb + singleExtraGb), deletable_projects: deletable.length };
+                   deletable_gb: round(deletableGb), single_extra_gb: round(singleExtraGb), legacy_gb: round(legacyGb),
+                   total_gb: round(excessGb + partialGb + refExtraGb + deletableGb + singleExtraGb + legacyGb), deletable_projects: deletable.length };
 
   // Platzbilanz (Ziel-Platz auf HDD/NAS ohne 5 % Reserve)
   const freeHdd = real.filter((d) => ["HDD", "NAS"].includes(d.tier) && d.free_gb != null)

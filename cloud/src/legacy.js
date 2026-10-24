@@ -56,3 +56,38 @@ export function legacyProjects(rows, disks) {
 }
 
 export const LEGACY_DECISIONS = { aussortieren: "Aussortieren", behalten: "Behalten", ansehen: "Nochmal ansehen", kein: "Kein Altprojekt" };
+
+// Projekte mit Datum bis einschließlich CUTOFF_YEAR (aus der Projektliste) zählen ebenfalls als Altprojekte.
+export const CUTOFF_YEAR = 2023;
+export function oldProjects(projects, disks) {
+  const live = new Set();
+  const newest = new Map();
+  for (const d of disks) {
+    if (d.uuid.startsWith("name:")) continue;
+    const cur = newest.get(d.name);
+    if (!cur || (d.last_scan || "") > (cur.last_scan || "")) newest.set(d.name, d);
+  }
+  for (const d of newest.values()) live.add(d.uuid);
+  const name = new Map(disks.map((d) => [d.uuid, d.name]));
+  const byCl = new Map();
+  for (const p of projects) {
+    if (p.status !== "validated" || !p.cluster_id || !p.date || Number(p.date.slice(0, 4)) > CUTOFF_YEAR || !live.has(p.disk_uuid)) continue;
+    if (!byCl.has(p.cluster_id)) byCl.set(p.cluster_id, { rows: [], names: new Set(), date: p.date });
+    const g = byCl.get(p.cluster_id);
+    g.rows.push(p); g.names.add(p.project_name);
+  }
+  const out = [];
+  for (const [cl, g] of byCl) {
+    const perDisk = new Map();
+    for (const r of g.rows) perDisk.set(r.disk_uuid, (perDisk.get(r.disk_uuid) || 0) + (r.size_bytes || 0) / 1e9);
+    const max = Math.max(...perDisk.values());
+    if (max < MIN_GB) continue;
+    const title = [...g.names].sort((a, b) => b.length - a.length)[0];
+    out.push({ key: `p|${cl}`, num: null, date: g.date, title, rule_key: cl, size_gb: Math.round(max * 100) / 100,
+               total_gb: Math.round([...perDisk.values()].reduce((s, x) => s + x, 0) * 100) / 100,
+               copies: [...perDisk].map(([u, gbv]) => ({ disk_uuid: u, disk: name.get(u) || "?", size_gb: Math.round(gbv * 100) / 100 })),
+               disks: [...new Set([...perDisk.keys()].map((u) => name.get(u) || "?"))].sort((a, b) => a.localeCompare(b, "de", { numeric: true })),
+               full_copies: [...perDisk.values()].filter((x) => x >= max * 0.95).length, source: "projekt" });
+  }
+  return out;
+}

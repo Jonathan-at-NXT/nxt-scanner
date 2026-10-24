@@ -221,3 +221,4 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); }
 .job .bar.indet span { width: 30% !important; animation: indet 1.4s ease-in-out infinite; }
 @keyframes indet { 0% { transform: translateX(-100%) } 100% { transform: translateX(340%) } }
 .job.done { opacity: .6 } .job.failed .bar span { background: var(--crit); }
+.callout { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--ok); border-radius: 8px; background: var(--panel); color: var(--text-2); line-height: 1.5; }

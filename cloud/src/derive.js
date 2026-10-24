@@ -169,7 +169,14 @@ export async function runDerive(env) {
   const overrides = new Map(((await env.DB.prepare("SELECT disk_uuid, rel_path, soll_name FROM folder_override").all()).results || [])
     .map((o) => [`${o.disk_uuid}|${o.rel_path}`, o.soll_name]));
   const cls = (n) => classify(n, overrides.get(`${n.disk_uuid}|${n.rel_path}`));
-  const projects = assignClusters(expandProjectWrappers(nodes.map(cls), children, cls));
+  const top = expandProjectWrappers(nodes.map(cls), children, cls);
+  // Unterordner mit Soll-Name (z. B. "_TO CHECK/JASCHA OSTERHAUS") zählen als eigener Projektordner
+  const have = new Set(top.map((p) => `${p.disk_uuid}|${p.rel_path}`));
+  for (const ch of children) {
+    const k = `${ch.disk_uuid}|${ch.rel_path}`;
+    if (overrides.has(k) && !have.has(k)) { top.push(cls(ch)); have.add(k); }
+  }
+  const projects = assignClusters(top);
   const disks = (await env.DB.prepare("SELECT uuid, used_bytes, last_scan FROM disks").all()).results || [];
   const counts = (await env.DB.prepare("SELECT disk_uuid, COUNT(*) n FROM folder_tree GROUP BY disk_uuid").all()).results || [];
   const nodeCount = new Map(counts.map((r) => [r.disk_uuid, r.n]));
@@ -194,7 +201,7 @@ export async function runDerive(env) {
 
 /** Nur neu ableiten, wenn sich Scans oder Soll-Namen geändert haben (spart D1-Schreibzugriffe). */
 // Bei Änderungen an der Zuordnungslogik hochzählen → nächster Lauf leitet neu ab
-const DERIVE_VERSION = "2026-10-24b";
+const DERIVE_VERSION = "2026-10-24c";
 
 export async function deriveIfChanged(env) {
   const r = await env.DB.prepare(

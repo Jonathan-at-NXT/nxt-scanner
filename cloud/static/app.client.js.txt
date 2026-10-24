@@ -125,9 +125,15 @@
       <div class="panel section"><h3>Platzbilanz</h3><div class="balance">
         <div class="kpi"><div class="label">Fehlt als 2. Kopie</div><div class="value num" style="color:var(--crit)">${fmtGb(b.need_gb)}</div><div class="sub">davon entschieden ${fmtGb(b.need_decided_gb)}</div></div>
         <div class="kpi"><div class="label">Frei auf HDD/NAS</div><div class="value num">${fmtGb(b.free_gb)}</div><div class="sub">ohne 5 % Reserve je Platte</div></div>
-        <div class="kpi"><div class="label">Wird frei</div><div class="value num" style="color:var(--ok)">${fmtGb(b.freeable_gb)}</div><div class="sub">zu viele Kopien ${fmtGb(c.phase4.excess_gb)} · Teilkopien ${fmtGb(c.phase4.partial_gb || 0)} · über Sollstand ${fmtGb(c.phase4.ref_extra_gb || 0)} · Löschbar ${fmtGb(c.phase4.deletable_gb)} · 1×-Regel ${fmtGb(c.phase4.single_extra_gb)}</div></div>
+        <div class="kpi"><div class="label">Wird frei</div><div class="value num" style="color:var(--ok)">${fmtGb(b.freeable_gb)}</div><div class="sub">zu viele Kopien ${fmtGb(c.phase4.excess_gb)} · Teilkopien ${fmtGb(c.phase4.partial_gb || 0)} · über Sollstand ${fmtGb(c.phase4.ref_extra_gb || 0)} · Löschbar ${fmtGb(c.phase4.deletable_gb)} · 1×-Regel ${fmtGb(c.phase4.single_extra_gb)} · Altprojekte aussortiert ${fmtGb(c.phase4.legacy_gb || 0)}</div></div>
         <div class="kpi"><div class="label">Lücke</div><div class="value num" style="color:${b.shortfall_gb ? "var(--warn)" : "var(--ok)"}">${b.shortfall_gb ? fmtGb(b.shortfall_gb) : "keine"}</div><div class="sub">inkl. Reserve; schließen durch Entscheidungen, Freigaben oder Kauf</div></div>
-      </div><p class="hint">Jede Entscheidung „1× reicht“ oder „Löschbar“ senkt den Bedarf und erhöht den freiwerdenden Platz.</p></div>
+      </div><p class="hint">Jede Entscheidung „1× reicht“ oder „Löschbar“ senkt den Bedarf und erhöht den freiwerdenden Platz.</p>
+      ${c.with_suggestions ? (() => { const w = c.with_suggestions, wb = w.balance;
+        return `<div class="callout"><b>Mit den ${fmtN(w.count)} offenen Vorschlägen aus dem Inhalts-Abgleich</b> (gleiche Dateien unter anderem Namen):
+          fehlt ${fmtGb(wb.need_gb)} statt ${fmtGb(b.need_gb)} · wird frei ${fmtGb(wb.freeable_gb)} statt ${fmtGb(b.freeable_gb)} ·
+          <b>Lücke ${wb.shortfall_gb ? fmtGb(wb.shortfall_gb) : "keine"}</b> statt ${fmtGb(b.shortfall_gb)} ·
+          2× gesichert ${fmtN(w.levels.ok + w.levels.mehrfach)} statt ${fmtN(w.levels_now.ok + w.levels_now.mehrfach)} Projekte.
+          <a href="#/zuordnen">Vorschläge prüfen</a></div>`; })() : ""}</div>
 
       <div class="grid two section">
         <div class="panel"><h3>Phase 1 · Nächste Anschluss-Runden (Überblick)</h3>
@@ -299,6 +305,7 @@
       const names = [...new Set(S.projects.flatMap((p) => p.types.flatMap((t) => t.copies.map((c) => c.soll_name || c.name))))].sort();
       return `
       <div class="head"><div><h1>Zuordnen</h1><p>Ordner, deren Name nicht dem Schema <span class="mono">JJJJ-MM-TT_Projekt_TYP</span> folgt. Mit einem Soll-Namen zählen sie zum richtigen Projekt und erscheinen als Umbenennen-Hinweis. Am Ordner selbst wird nichts geändert.</p></div></div>
+      ${suggestionsBlock(s)}
       <datalist id="namelist">${names.slice(0, 3000).map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
       <div class="panel">${list.length ? list.slice(0, ui.assign.limit).map((u, i) => `
         <div class="assign"><div><div class="name">${esc(u.name)}</div><div class="sub">${esc(u.disk)} · ${fmtGb(u.size_gb)} · ${fmtN(u.files)} Dateien</div></div>
@@ -309,7 +316,7 @@
     },
 
     async altprojekte() {
-      const r = await fetch("/api/legacy"); const { items, decisions } = await r.json();
+      const r = await fetch("/api/legacy"); const { items, decisions, cutoff_year } = await r.json();
       S.legacy = items;
       const all = items; const real = items.filter((x) => x.decision !== "kein");
       const q = ($("#q").value || "").trim().toLowerCase();
@@ -318,20 +325,20 @@
       for (const k of Object.keys(decisions)) cnt[k] = all.filter((x) => x.decision === k);
       const f = ui.legacy.f;
       let list = f === "alle" ? real : f === "offen" ? cnt.offen : cnt[f] || [];
-      if (q) list = list.filter((x) => `${x.num} ${x.title} ${x.disks.join(" ")}`.toLowerCase().includes(q));
-      list = sortBy(list, "legacy", { num: (x) => x.num, title: (x) => x.title, size: (x) => x.size_gb, copies: (x) => x.full_copies, total: (x) => x.total_gb });
+      if (q) list = list.filter((x) => `${x.num ?? x.date} ${x.title} ${x.disks.join(" ")}`.toLowerCase().includes(q));
+      list = sortBy(list, "legacy", { num: (x) => x.num ?? 1000 + Number((x.date || "").slice(0, 4)), title: (x) => x.title, size: (x) => x.size_gb, copies: (x) => x.full_copies, total: (x) => x.total_gb });
       const chip = (k, label, l) => `<button class="chip ${f === k ? "on" : ""}" data-legacy-f="${k}">${label} <b>${l.length}</b> <span class="sub">${sum(l)}</span></button>`;
       const freed = cnt.aussortieren.reduce((s, x) => s + x.total_gb, 0);
-      return `<div class="head"><div><h1>Altprojekte</h1><p>Nils' alte Projekte (Ordner mit Nummer wie „113-…“), ab ${5} GB. Pro Projekt entscheiden:
-        <b>Aussortieren</b> (wird nach Prüfung gelöscht), <b>Behalten</b> (kommt gesichert auf NB 01 / 5-TB-Platten) oder <b>Nochmal ansehen</b> (wird zum Durchsehen bereitgelegt).</p></div></div>
+      return `<div class="head"><div><h1>Altprojekte</h1><p>Nils' alte Projekte (Ordner mit Nummer wie „113-…“) und alle Projekte bis einschließlich ${cutoff_year}, ab 5 GB. Pro Projekt entscheiden:
+        <b>Aussortieren</b> (wird nach Prüfung gelöscht; bei Projekten aus der Liste = Sicherung „Löschbar“), <b>Behalten</b> (kommt gesichert auf NB 01 / 5-TB-Platten) oder <b>Nochmal ansehen</b> (wird zum Durchsehen bereitgelegt).</p></div></div>
       <div class="kpis">
         <div class="kpi"><div class="label">Projekte</div><div class="value num">${fmtN(real.length)}</div><div class="sub">${sum(real)} je einmal gezählt</div></div>
         <div class="kpi"><div class="label">Noch offen</div><div class="value num">${fmtN(cnt.offen.length)}</div><div class="sub">${sum(cnt.offen)}</div></div>
         <div class="kpi"><div class="label">Wird frei durch Aussortieren</div><div class="value num" style="color:var(--ok)">${fmtGb(freed)}</div><div class="sub">alle Kopien zusammen</div></div>
       </div>
       <div class="row" style="gap:8px;flex-wrap:wrap;margin:14px 0">${chip("offen", "Offen", cnt.offen)}${Object.entries(decisions).map(([k, v]) => chip(k, v, cnt[k])).join("")}${chip("alle", "Alle", real)}</div>
-      <div class="panel">${list.length ? `<table class="table"><thead><tr>${th("legacy", "num", "Nr.")}${th("legacy", "title", "Projekt")}${th("legacy", "size", "Größe", "r")}${th("legacy", "copies", "Liegt auf")}<th>Entscheidung</th></tr></thead><tbody>
-        ${list.map((x) => `<tr><td class="num">${x.num}</td><td><b>${esc(x.title)}</b>${x.note ? `<div class="sub">${esc(x.note)}</div>` : ""}${x.decided_by ? `<div class="sub faint">${esc(LEG_LABEL(decisions, x.decision))} · ${esc(x.decided_by)}</div>` : ""}</td>
+      <div class="panel">${list.length ? `<table class="table"><thead><tr>${th("legacy", "num", "Nr. / Datum")}${th("legacy", "title", "Projekt")}${th("legacy", "size", "Größe", "r")}${th("legacy", "copies", "Liegt auf")}<th>Entscheidung</th></tr></thead><tbody>
+        ${list.map((x) => `<tr><td class="num">${x.num != null ? x.num : `<span class="sub">${esc(x.date)}</span>`}</td><td><b>${esc(x.title)}</b>${x.note ? `<div class="sub">${esc(x.note)}</div>` : ""}${x.decided_by ? `<div class="sub faint">${esc(LEG_LABEL(decisions, x.decision))} · ${esc(x.decided_by)}</div>` : ""}</td>
           <td class="num r">${fmtGb(x.size_gb)}</td>
           <td><span class="tc ${copyClass(x.full_copies)}">${x.full_copies}×</span> <span class="sub">${esc(x.copies.map((c) => `${c.disk}${c.size_gb < x.size_gb * 0.95 ? ` (Teil, ${fmtGb(c.size_gb)})` : ""}`).join(", "))}</span></td>
           <td class="row" style="gap:6px;flex-wrap:wrap">${Object.entries(decisions).map(([k, v]) => `<button class="btn small ${x.decision === k ? "" : "ghost"}" data-legacy-key="${esc(x.key)}" data-legacy-dec="${x.decision === k ? "" : k}" title="${x.decision === k ? "Entscheidung zurücknehmen" : v}">${esc(v)}</button>`).join("")}
@@ -350,6 +357,46 @@
   };
 
   const LEG_LABEL = (d, k) => d[k] || "offen";
+  const SUGG_KIND = { unbenannt: "Ordner ohne Projektnamen", gleich: "Gleiches Projekt, anderer Name", teilmenge: "Steckt in anderem Projekt" };
+  function suggestionsBlock(s) {
+    const all = S.suggestions || [];
+    if (!all.length) return "";
+    const k = ui.assign.kind || "alle";
+    let list = k === "alle" ? all : all.filter((x) => x.kind === k);
+    if (s) list = list.filter((x) => [x.rel_path, x.disk, x.soll_name, x.target_label].some((v) => String(v || "").toLowerCase().includes(s)));
+    S.suggVisible = list;
+    const chip = (key, label, l) => `<button class="chip ${k === key ? "on" : ""}" data-sugg-kind="${key}">${label} <b>${l.length}</b></button>`;
+    return `<div class="panel section"><div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><h3 style="margin:0">Vorschläge aus dem Inhalts-Abgleich</h3>
+        <button class="btn small" data-sugg-all>Alle ${fmtN(list.length)} angezeigten übernehmen</button></div>
+      <p class="hint">Gleiche Dateien (Name + Größe) unter anderem Ordnernamen. „Übernehmen“ setzt den Soll-Namen: der Ordner zählt dann als Kopie des Projekts. Am Ordner selbst wird nichts geändert.</p>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">${chip("alle", "Alle", all)}${Object.entries(SUGG_KIND).map(([key, v]) => chip(key, v, all.filter((x) => x.kind === key))).join("")}</div>
+      ${list.slice(0, 150).map((x) => `<div class="assign"><div><div class="name">${esc(x.rel_path)}</div>
+          <div class="sub">${esc(x.disk)} · ${fmtGb((x.size_bytes || 0) / 1e9)}${x.current_label ? ` · bisher: ${esc(x.current_label)}` : ""}</div>
+          <div class="sub">${esc(SUGG_KIND[x.kind] || x.kind)}: ${Math.round(x.frac * 100)} % des Ordners (${fmtGb(x.shared_gb)}) stecken in <b>${esc(x.target_label)}</b>${x.target_frac < 0.9 ? ` (deckt ${Math.round(x.target_frac * 100)} % davon ab)` : ""}</div></div>
+        <div class="mono" style="align-self:center">→ ${esc(x.soll_name)}</div>
+        <div class="row"><button class="btn small" data-sugg="uebernehmen" data-sd="${esc(x.disk_uuid)}" data-sr="${esc(x.rel_path)}">Übernehmen</button>
+          <button class="btn small ghost" data-sugg="verwerfen" data-sd="${esc(x.disk_uuid)}" data-sr="${esc(x.rel_path)}">Verwerfen</button></div></div>`).join("")}
+    </div>`;
+  }
+  document.addEventListener("click", async (e) => {
+    const t = e.target.closest("[data-sugg-kind],[data-sugg],[data-sugg-all]");
+    if (!t) return;
+    e.preventDefault();
+    if (t.dataset.suggKind) { ui.assign.kind = t.dataset.suggKind; render(); return; }
+    try {
+      if (t.hasAttribute("data-sugg-all")) {
+        const list = S.suggVisible || [];
+        if (!list.length || !window.confirm(`${list.length} Vorschläge übernehmen?`)) return;
+        for (let i = 0; i < list.length; i++)
+          await post("/api/suggestion", { disk_uuid: list[i].disk_uuid, rel_path: list[i].rel_path, action: "uebernehmen", no_derive: i < list.length - 1 });
+        toast(`${list.length} übernommen`);
+      } else {
+        await post("/api/suggestion", { disk_uuid: t.dataset.sd, rel_path: t.dataset.sr, action: t.dataset.sugg });
+        toast(t.dataset.sugg === "uebernehmen" ? "Übernommen" : "Verworfen");
+      }
+      await load(); render();
+    } catch (err) { toast(err.message, true); }
+  });
   document.addEventListener("click", async (e) => {
     const t = e.target.closest("[data-legacy-f],[data-legacy-key],[data-legacy-note]");
     if (!t) return;
