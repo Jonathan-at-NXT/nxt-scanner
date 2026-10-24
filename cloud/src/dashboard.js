@@ -90,7 +90,9 @@ async function loadState(env) {
   const rm = await env.DB.prepare("SELECT value FROM meta WHERE key='cleanup_reserve_months'").first();
   const reserveMonths = rm ? Number(rm.value) : DEFAULT_RESERVE_MONTHS;
   const legacy = await loadLegacy(env, projects);
-  const legacyGb = legacy.filter((x) => x.source === "nummer" && x.decision === "aussortieren").reduce((s, x) => s + x.total_gb, 0);
+  // Nils' Nummern-Ordner (keine Projekte der Liste): Aussortieren = alle Kopien frei, Nur 1× = alle bis auf eine
+  const legacyGb = legacy.filter((x) => x.source === "nummer").reduce((s, x) => s + (x.decision === "aussortieren" ? x.total_gb
+    : x.decision === "einfach" ? Math.max(0, x.total_gb - x.size_gb) : 0), 0);
   const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths, legacyGb });
   // Vorschläge aus dem Inhalts-Abgleich: offen und noch ohne Soll-Name
   const ovKeys = new Set(overrides.map((o) => `${o.disk_uuid}|${o.rel_path}`));
@@ -220,8 +222,8 @@ async function handleWrite(path, body, env, user) {
     if (key.startsWith("p|") && "decision" in body && next.decision !== (cur.decision || null)) {
       const rk = key.slice(2);
       const rule = (await env.DB.prepare("SELECT sicherung FROM project_rule WHERE rule_key=?").bind(rk).first()) || {};
-      const want = next.decision === "aussortieren" ? "loeschbar" : next.decision === "behalten" ? "doppelt"
-        : rule.sicherung === "loeschbar" && cur.decision === "aussortieren" ? "doppelt" : null;
+      const want = next.decision === "aussortieren" ? "loeschbar" : next.decision === "einfach" ? "einfach" : next.decision === "behalten" ? "doppelt"
+        : ["loeschbar", "einfach"].includes(rule.sicherung) && ["aussortieren", "einfach"].includes(cur.decision) ? "doppelt" : null;
       if (want && want !== rule.sicherung) {
         await env.DB.prepare(`INSERT INTO project_rule(rule_key, sicherung, require_tiers, note, updated_by, updated_at) VALUES(?,?,'',NULL,?,?)
           ON CONFLICT(rule_key) DO UPDATE SET sicherung=excluded.sicherung, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)

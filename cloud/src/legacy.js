@@ -55,7 +55,7 @@ export function legacyProjects(rows, disks) {
   return out.sort((a, b) => a.num - b.num);
 }
 
-export const LEGACY_DECISIONS = { aussortieren: "Aussortieren", behalten: "Behalten", ansehen: "Nochmal ansehen", kein: "Kein Altprojekt" };
+export const LEGACY_DECISIONS = { aussortieren: "Aussortieren", einfach: "Nur 1×", behalten: "Behalten (2×)", ansehen: "Nochmal ansehen", kein: "Kein Altprojekt" };
 
 // Projekte mit Datum bis einschließlich CUTOFF_YEAR (aus der Projektliste) zählen ebenfalls als Altprojekte.
 export const CUTOFF_YEAR = 2023;
