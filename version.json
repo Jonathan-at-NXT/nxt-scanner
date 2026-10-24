@@ -1,5 +1,5 @@
 {
-  "version": "1.9.0",
+  "version": "2.0.0",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Zentrale Datenbank: zusätzlich zu Notion wird die Ordnerstruktur aller Datenträger (2 Ebenen tief) lokal in SQLite gespeichert und an eine zentrale Cloudflare-D1-DB gepusht. Ermöglicht schnelle Auswertungen (Auslastung, Backup-Redundanz) über alle Systeme. Notion-Ablauf unverändert. Menüpunkt 'D1-Sync einrichten' (für alle sichtbar) zum Eintragen des Tokens."
+  "release_notes": "Scans laufen jetzt auch offline: Ergebnisse kommen in eine Warteschlange und werden hochgeladen, sobald Internet da ist (pro Datenträger zählt nur der neueste Scan). Unvollständige Scans (Lesefehler, abgezogene Platte) werden nicht mehr als „0 Dateien“ hochgeladen. Notion wird jetzt zentral aus der Datenbank befüllt, der Scanner braucht keinen Notion-Zugang mehr. Erkennt zusätzlich NH- und NB-Gehäuse. Fortschritt laufender Scans im Speicher-Dashboard."
 }
