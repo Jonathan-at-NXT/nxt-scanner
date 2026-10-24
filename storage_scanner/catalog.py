@@ -22,6 +22,7 @@ import os
 import plistlib
 import sqlite3
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -524,16 +525,29 @@ def after_scan(mount: str, uuid: str, name: str, config: dict) -> None:
             outbox.flush_safe()
         minutes = float(config.get("file_catalog_hash_minutes") or 0)
         if minutes > 0:
-            import socket
-            conn = connect()
-            try:
-                h = hash_pass(mount, conn, uuid=uuid, budget_s=minutes * 60, host=socket.gethostname(),
-                              min_size=HASH_MIN_SIZE)
-                _log.info("Katalog-Hash %s: %s", mount, h)
-            finally:
-                conn.close()
+            # Nebenher, damit der nächste Scan nicht wartet; immer nur ein Hash-Lauf gleichzeitig
+            threading.Thread(target=_hash_bg, args=(mount, uuid, minutes), daemon=True).start()
     except Exception as e:  # noqa: BLE001
         _log.error("Katalog-Nacharbeit fehlgeschlagen fuer %s: %s", mount, e)
+
+
+_hash_lock = threading.Lock()
+
+
+def _hash_bg(mount: str, uuid: str, minutes: float) -> None:
+    import socket
+    with _hash_lock:
+        if not Path(mount).is_dir():
+            return
+        conn = connect()
+        try:
+            h = hash_pass(mount, conn, uuid=uuid, budget_s=minutes * 60, host=socket.gethostname(),
+                          min_size=HASH_MIN_SIZE)
+            _log.info("Katalog-Hash %s: %s", mount, h)
+        except Exception as e:  # noqa: BLE001 - Platte abgezogen o. ä.; nächster Scan macht weiter
+            _log.error("Katalog-Hash fehlgeschlagen fuer %s: %s", mount, e)
+        finally:
+            conn.close()
 
 
 def catalog_safe(mount: str, config: dict) -> None:
