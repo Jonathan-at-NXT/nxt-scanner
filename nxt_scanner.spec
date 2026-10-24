@@ -8,6 +8,11 @@ spec_dir = os.path.dirname(os.path.abspath(SPEC))
 sys.path.insert(0, spec_dir)
 from storage_scanner import __version__
 
+# Team-Build (NXT_TEAM=1): ohne Admin-Teile (Karten-Ingest, Kopieren, Notion-Auswertung).
+# Admin-Build für Sicherungs-/Haupt-/Intel-Mac wird nur lokal verteilt, nie veröffentlicht.
+TEAM = os.environ.get("NXT_TEAM") == "1"
+ADMIN_ONLY = ['storage_scanner.ingest', 'storage_scanner.transfer', 'storage_scanner.admin']
+
 a = Analysis(
     [os.path.join(spec_dir, 'run_app.py')],
     pathex=[spec_dir],
@@ -15,8 +20,9 @@ a = Analysis(
     datas=[
         (os.path.join(spec_dir, 'resources', 'menubar_iconTemplate.png'), 'resources'),
         (os.path.join(spec_dir, 'resources', 'menubar_iconTemplate@2x.png'), 'resources'),
-    ],
-    hiddenimports=[
+    ] + ([(os.path.join(spec_dir, 'resources', 'bin', 'smartctl'), os.path.join('resources', 'bin'))]
+         if os.path.exists(os.path.join(spec_dir, 'resources', 'bin', 'smartctl')) else []),
+    hiddenimports=[m for m in [
         # App-Module
         'storage_scanner',
         'storage_scanner.scan',
@@ -68,7 +74,7 @@ a = Analysis(
         # tqdm
         'tqdm',
         'tqdm.auto',
-    ],
+    ] if not (TEAM and any(m == x or m.startswith(x + '.') for x in ADMIN_ONLY))],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -79,7 +85,7 @@ a = Analysis(
         'contourpy', 'cv2', 'hf_transfer', 'hf_xet', 'kiwisolver',
         'markupsafe', 'mlx', 'regex', 'safetensors', 'sentencepiece',
         'tokenizers', 'torch', 'yaml',
-    ],
+    ] + (ADMIN_ONLY if TEAM else []),
     noarchive=False,
     optimize=0,
 )

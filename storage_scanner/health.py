@@ -38,7 +38,9 @@ def _now() -> str:
 
 
 def _smartctl() -> str | None:
-    for p in ("/opt/homebrew/bin/smartctl", "/usr/local/bin/smartctl", shutil.which("smartctl")):
+    from .paths import get_resource_path
+    bundled = str(get_resource_path("bin/smartctl"))  # in der App mitgeliefert (Team-Macs ohne Homebrew)
+    for p in (bundled, "/opt/homebrew/bin/smartctl", "/usr/local/bin/smartctl", shutil.which("smartctl")):
         if p and Path(p).exists():
             return p
     return None
@@ -237,7 +239,7 @@ def check(mount: str, fs: bool = False, read_minutes: float = 0, conn=None) -> d
 def health_safe(mount: str, config: dict) -> None:
     """Best-effort nach jedem Scan. `health_check: true` aktiviert SMART;
     `health_fs`/`health_read_minutes` zusätzlich (nur Sicherungs-Mac)."""
-    if not config.get("health_check"):
+    if config.get("health_check", True) is False:
         return
     try:
         conn = None

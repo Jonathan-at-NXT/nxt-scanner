@@ -20,3 +20,9 @@ crons = ["*/15 * * * *"]
 binding = "DB"
 database_name = "nxt-scanner"
 database_id = "82c8542a-1a97-481d-a0dd-1b8c4af9d4bd"
+
+# Datei-Katalog (eigene D1, EU-Jurisdiktion): jede Datei je Datenträger, nur Metadaten
+[[d1_databases]]
+binding = "CATALOG"
+database_name = "nxt-catalog"
+database_id = "920f10f1-c565-40dc-99b9-f02ce56f00d7"

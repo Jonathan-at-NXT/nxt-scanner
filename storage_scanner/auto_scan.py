@@ -123,10 +123,11 @@ def scan_and_sync(volume_name: str) -> bool:
     try:
         from .notion_sync import load_config as _lc
         _cfg = _lc()
-        _single = bool(_cfg.get('file_catalog') and _cfg.get('d1_ingest_url') and _cfg.get('d1_token'))
+        from .catalog import catalog_enabled
+        _single = bool(catalog_enabled(_cfg) and _cfg.get('d1_ingest_url') and _cfg.get('d1_token'))
         if _single:
             from .catalog import scan_via_catalog  # ein Durchlauf statt du/find je Ordner
-            scan_via_catalog(volume_path, str(report_path))
+            _rep = scan_via_catalog(volume_path, str(report_path))
         else:
             run_scan(volume_path, str(report_path))
         log.info(f"Scan abgeschlossen: {volume_name}")
@@ -149,6 +150,9 @@ def scan_and_sync(volume_name: str) -> bool:
         from .catalog import catalog_safe
         if not _single:
             catalog_safe(volume_path, load_config())
+        else:
+            from .catalog import after_scan
+            after_scan(volume_path, _rep['scan_info']['volume_uuid'], _rep.get('_display_name') or volume_name, load_config())
         return True
     except Exception as e:
         log.error(f"Fehler bei {volume_name}: {e}")

@@ -349,8 +349,8 @@ def inventory(mount: str, conn: sqlite3.Connection, vol: dict | None = None,
 # ── Fingerprints (liest Inhalte, langsam, resumable) ──────────────
 
 def hash_pass(mount: str, conn: sqlite3.Connection, uuid: str | None = None,
-              budget_s: float | None = None, host: str = "", prefix: str = "") -> dict:
-    """Fingerprintet alle noch ungehashten Dateien des Volumes, größte zuerst.
+              budget_s: float | None = None, host: str = "", prefix: str = "", min_size: int = 0) -> dict:
+    """Fingerprintet alle noch ungehashten Dateien des Volumes (ab min_size), größte zuerst.
     Bricht nach budget_s Sekunden sauber ab; der nächste Lauf macht weiter."""
     from .ingest.verify import fingerprint
 
@@ -360,8 +360,8 @@ def hash_pass(mount: str, conn: sqlite3.Connection, uuid: str | None = None,
     uuid = uuid or volume_info(str(mount), serials={})["uuid"]
     started, t0 = _now(), time.monotonic()
     q = """SELECT rel_path,size,mtime FROM file
-           WHERE volume_uuid=? AND present=1 AND fingerprint IS NULL"""
-    args = [uuid]
+           WHERE volume_uuid=? AND present=1 AND fingerprint IS NULL AND size >= ?"""
+    args = [uuid, min_size]
     if prefix.strip("/"):
         pre = prefix.strip("/")
         esc = pre.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -500,10 +500,44 @@ def find_folders(conn: sqlite3.Connection, name: str) -> list[dict]:
 
 # ── Einbindung in den Auto-Scan ───────────────────────────────────
 
+HASH_MIN_SIZE = 50_000_000   # Fingerabdruck nach dem Scan nur für Footage-große Dateien
+
+
+def catalog_enabled(config: dict) -> bool:
+    """Datei-Katalog ist Standard; nur `file_catalog: false` schaltet ihn ab."""
+    return config.get("file_catalog", True) is not False
+
+
+def _d1_ready(config: dict) -> bool:
+    return bool(config.get("d1_ingest_url") and config.get("d1_token"))
+
+
+def after_scan(mount: str, uuid: str, name: str, config: dict) -> None:
+    """Nach einem Ein-Durchlauf-Scan: Katalog-Upload vormerken, dann (nur wo eingeschaltet)
+    Fingerabdrücke im Zeitbudget. Best-effort, stört den Scan nie."""
+    try:
+        if _d1_ready(config):
+            from . import outbox
+            enqueue_sync(uuid, name)
+            outbox.flush_safe()
+        minutes = float(config.get("file_catalog_hash_minutes") or 0)
+        if minutes > 0:
+            import socket
+            conn = connect()
+            try:
+                h = hash_pass(mount, conn, uuid=uuid, budget_s=minutes * 60, host=socket.gethostname(),
+                              min_size=HASH_MIN_SIZE)
+                _log.info("Katalog-Hash %s: %s", mount, h)
+            finally:
+                conn.close()
+    except Exception as e:  # noqa: BLE001
+        _log.error("Katalog-Nacharbeit fehlgeschlagen fuer %s: %s", mount, e)
+
+
 def catalog_safe(mount: str, config: dict) -> None:
-    """Best-effort nach jedem Scan. Nur wenn `file_catalog` in der Config an ist.
+    """Best-effort nach jedem Scan (Standard an; `file_catalog: false` schaltet ab).
     `file_catalog_hash_minutes` (Default 0 = nur Inventur) begrenzt den Hash-Lauf."""
-    if not config.get("file_catalog"):
+    if not catalog_enabled(config):
         return
     try:
         import socket
@@ -512,9 +546,11 @@ def catalog_safe(mount: str, config: dict) -> None:
         try:
             res = inventory(mount, conn, host=host)
             _log.info("Katalog-Inventur %s: %s", mount, res)
+            if res.get("complete") and _d1_ready(config):
+                enqueue_sync(res["uuid"], res["name"])
             minutes = float(config.get("file_catalog_hash_minutes") or 0)
             if minutes > 0:
-                h = hash_pass(mount, conn, uuid=res["uuid"], budget_s=minutes * 60, host=host)
+                h = hash_pass(mount, conn, uuid=res["uuid"], budget_s=minutes * 60, host=host, min_size=HASH_MIN_SIZE)
                 _log.info("Katalog-Hash %s: %s", mount, h)
         finally:
             conn.close()
@@ -737,6 +773,9 @@ def scan_via_catalog(mount: str, report_path: str, conn: sqlite3.Connection | No
 # ── Katalog nach D1 synchronisieren (nur Änderungen, fortsetzbar) ──────
 
 SYNC_BATCH = 2000
+# Einzeln hochgeladen werden nur Dateien ab 1 MB (D1 hat max. 10 GB je Datenbank);
+# kleinere stecken in den Ordnersummen von folder_tree, vollständig bleibt der lokale Katalog.
+SYNC_MIN_SIZE = 1_000_000
 
 
 def _ensure_sync_table(conn: sqlite3.Connection) -> None:
@@ -766,8 +805,8 @@ def sync_to_d1(conn: sqlite3.Connection, uuid: str, post, host: str = "", batch:
                ORDER BY changed_at, id LIMIT ?""", (uuid, w_ts or "", w_ts or "", w_id or 0, batch)).fetchall()
         last = len(rows) < batch
         payload = {"disk_uuid": uuid, "host": host,
-                   "upserts": [[r[2], r[3], r[4], r[5], r[6]] for r in rows if r[7]],
-                   "deletes": [r[2] for r in rows if not r[7]]}
+                   "upserts": [[r[2], r[3], r[4], r[5], r[6]] for r in rows if r[7] and (r[4] or 0) >= SYNC_MIN_SIZE],
+                   "deletes": [r[2] for r in rows if not r[7] or (r[4] or 0) < SYNC_MIN_SIZE]}
         if last:
             f, b = conn.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM file WHERE volume_uuid=? AND present=1",
                                 (uuid,)).fetchone()

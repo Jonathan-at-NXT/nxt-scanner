@@ -26,3 +26,4 @@ __pycache__/
 .dev.vars
 cloud/.dev.vars
 cloud/.wrangler/
+resources/bin/

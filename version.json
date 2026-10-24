@@ -1,5 +1,5 @@
 {
   "version": "2.0.0",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Scans laufen jetzt auch offline: Ergebnisse kommen in eine Warteschlange und werden hochgeladen, sobald Internet da ist (pro Datenträger zählt nur der neueste Scan). Unvollständige Scans (Lesefehler, abgezogene Platte) werden nicht mehr als „0 Dateien“ hochgeladen. Notion wird jetzt zentral aus der Datenbank befüllt, der Scanner braucht keinen Notion-Zugang mehr. Erkennt zusätzlich NH- und NB-Gehäuse. Fortschritt laufender Scans im Speicher-Dashboard."
+  "release_notes": "Scans gehen jetzt in einem Durchlauf und deutlich schneller. Jede Datei (Name, Größe, Datum, kein Inhalt) landet im zentralen Datei-Katalog, damit wir Projekte auch unter anderem Namen wiederfinden. Neu: Platten-Check (SMART), bei SSDs inkl. Verschleiß. Scans laufen auch offline (Warteschlange) und unvollständige Scans werden nicht mehr als „0 Dateien“ hochgeladen. Notion wird zentral befüllt, kein Notion-Zugang mehr nötig. Wichtig nach dem Update: einmal den Zugriff auf Wechseldatenträger erlauben (Dialog bestätigen oder Systemeinstellungen > Datenschutz & Sicherheit > Dateien und Ordner > NXT Scanner)."
 }

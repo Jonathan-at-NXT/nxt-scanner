@@ -137,11 +137,25 @@ def test_diff_prefix_does_not_match_sibling_with_like_wildcards(tmp_path):
     assert d["summary"]["ref_files"] == 1
 
 
-def test_catalog_safe_is_opt_in(tmp_path, monkeypatch):
+def test_catalog_safe_can_be_switched_off(tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(catalog, "connect", lambda *a, **k: called.append(1))
-    catalog.catalog_safe(str(tmp_path), {})
+    catalog.catalog_safe(str(tmp_path), {"file_catalog": False})
     assert called == []
+    assert catalog.catalog_enabled({}) is True
+
+
+def test_sync_uploads_only_files_from_1mb(tmp_path, monkeypatch):
+    vol = tmp_path / "vol"
+    _write(vol, "P/big.mp4", b"x" * 1_000_000)
+    _write(vol, "P/small.xml", b"x" * 10)
+    monkeypatch.setattr(catalog, "volume_info", lambda m, serials=None: _vol("U5", "T5"))
+    conn = catalog.connect(":memory:")
+    catalog.inventory(str(vol), conn)
+    sent = []
+    catalog.sync_to_d1(conn, "U5", lambda p: sent.append(p) or True)
+    assert [u[0] for u in sent[0]["upserts"]] == ["P/big.mp4"]
+    assert sent[-1]["totals"]["files"] == 2
 
 
 def test_parse_ioreg_serials_maps_whole_disks_and_drops_placeholders():

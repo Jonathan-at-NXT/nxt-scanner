@@ -17,7 +17,12 @@ import rumps
 from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
 
 from . import __version__, db
-from .ingest import store, orchestrator, device_monitor, camera_map, d1_projects
+try:  # Admin-Teile (Karten-Ingest) fehlen im Team-Build
+    from .ingest import store, orchestrator, device_monitor, camera_map, d1_projects
+    ADMIN_AVAILABLE = True
+except ImportError:
+    store = orchestrator = device_monitor = camera_map = d1_projects = None
+    ADMIN_AVAILABLE = False
 from .paths import (
     CONFIG_PATH, LOG_PATH, LAST_SCAN_PATH, REPORTS_DIR,
     ensure_dirs, migrate_legacy_data, get_resource_path,
@@ -80,7 +85,7 @@ class StorageScannerApp(rumps.App):
         self._fail_counts: dict[str, int] = {}
         config = load_config()
         self._user_name = config.get("user_name", "")
-        self._admin_mode = config.get("admin_mode", False) is True
+        self._admin_mode = ADMIN_AVAILABLE and config.get("admin_mode", False) is True
         self._hidden_volumes: set[str] = set(config.get("hidden_volumes", []))
         self._worker = threading.Thread(target=self._process_queue, daemon=True)
         self._worker.start()
@@ -629,10 +634,11 @@ class StorageScannerApp(rumps.App):
             # Scan + lokale Ablage laufen immer, auch offline
             from .notion_sync import load_config as _lc
             _cfg = _lc()
-            _single = bool(_cfg.get('file_catalog') and _cfg.get('d1_ingest_url') and _cfg.get('d1_token'))
+            from .catalog import catalog_enabled
+            _single = bool(catalog_enabled(_cfg) and _cfg.get('d1_ingest_url') and _cfg.get('d1_token'))
             if _single:
                 from .catalog import scan_via_catalog  # ein Durchlauf statt du/find je Ordner
-                scan_via_catalog(volume_path, str(report_path))
+                _rep = scan_via_catalog(volume_path, str(report_path))
             else:
                 run_scan(volume_path, str(report_path))
 
@@ -665,6 +671,9 @@ class StorageScannerApp(rumps.App):
             from .catalog import catalog_safe
             if not _single:
                 catalog_safe(volume_path, load_config())
+            else:
+                from .catalog import after_scan
+                after_scan(volume_path, _rep['scan_info']['volume_uuid'], _rep.get('_display_name') or volume_name, load_config())
         except Exception as e:
             self._fail_counts[volume_name] = self._fail_counts.get(volume_name, 0) + 1
             self._scan_times[volume_name] = datetime.now().isoformat()
@@ -804,6 +813,11 @@ class StorageScannerApp(rumps.App):
             threading.Thread(target=self._do_update_check, args=(True,), daemon=True).start()
 
     def _do_update_check(self, notify_if_current: bool = False):
+        if ADMIN_AVAILABLE:
+            # Admin-Build: das Team-Release würde die Admin-Teile entfernen → Updates nur per Intranet
+            self.update_item.title = f"Admin-Build v{__version__} (Updates per Intranet)"
+            self._update_busy = False
+            return
         try:
             self._log("Update-Check gestartet...")
             info = check_for_update()
@@ -863,7 +877,7 @@ def ask_for_setup() -> None:
     (Auswertung/Fullfilment); den Notion-Spiegel der Scans macht der Worker aus D1."""
     config = load_config()
     changed = False
-    admin = config.get("admin_mode", False) is True
+    admin = ADMIN_AVAILABLE and config.get("admin_mode", False) is True
 
     # Name
     if not config.get("user_name"):
