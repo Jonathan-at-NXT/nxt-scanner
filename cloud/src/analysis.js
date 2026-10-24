@@ -55,8 +55,12 @@ export function buildDisks(disks, metaRows, projects, healthRows = []) {
     const dup = (byName.get(d.name) || 0) > 1;
     const stale = dup && newest.get(d.name)?.uuid !== d.uuid && !m.separate_disk;
     const tier = m.tier || guessTier(d.name);
-    const used = d.fs_used_bytes ?? d.used_bytes ?? null;
     const cap = d.capacity_bytes || null;
+    // Plausibilität: statvfs läuft auf macOS bei > 16 TiB über (negative/zu große Werte) → dann used_bytes
+    const ok = (v) => v != null && v >= 0 && (!cap || v <= cap);
+    // Beide plausibel → der größere (freien Platz nie überschätzen; Überlauf kann auch klein aussehen)
+    const usedVals = [d.fs_used_bytes, d.used_bytes].filter(ok);
+    const used = usedVals.length ? Math.max(...usedVals) : null;
     return {
       uuid: d.uuid, name: d.name, tier, tier_source: m.tier ? (m.tier_source || "manual") : (tier ? "guess" : null),
       holder: m.holder || d.last_user || null, holder_source: m.holder ? "manual" : "scan",
