@@ -541,7 +541,7 @@
           ${t.partial ? `<div class="sub">${t.partial} Teilkopie${t.partial > 1 ? "n" : ""} (unter 95 % des Sollstands, zählen nicht als Kopie)</div>` : ""}
           ${t.copies.map((c) => `<div class="copy"><div><a href="#" data-disk="${esc(c.disk_uuid)}" class="name">${esc(c.disk)}</a> ${tierBadge(c.tier)} <span class="sub">bei ${esc(c.holder || "?")} · Scan ${rel(c.last_scan)}</span>
               ${c.ref ? `<span class="tc c2">Sollstand</span> <a href="#" class="sub" data-ref-type="${esc(t.type)}" data-ref-disk="">zurücksetzen</a>`
-                      : `${c.full ? "" : '<span class="tc c1">Teilkopie</span> '}<a href="#" class="sub" data-ref-type="${esc(t.type)}" data-ref-disk="${esc(c.disk_uuid)}" title="Diese Kopie ist der vollständige Stand (z. B. weil Material bewusst gelöscht wurde)">als Sollstand</a>`}</div>
+                      : `${c.full ? "" : `<span class="tc c1">${c.zero ? c.zero + " leere Dateien" : "Teilkopie"}</span> `}<a href="#" class="sub" data-ref-type="${esc(t.type)}" data-ref-disk="${esc(c.disk_uuid)}" title="Diese Kopie ist der vollständige Stand (z. B. weil Material bewusst gelöscht wurde)">als Sollstand</a>`}</div>
             <div class="num r">${fmtGb(c.size_gb)} <span class="sub">${fmtN(c.files)} Dateien</span></div>
             <div class="path">${esc(c.rel_path)}${c.soll_name ? " → Soll: " + esc(c.soll_name) : ""}</div></div>`).join("")}</div>`).join("")}
       </div>

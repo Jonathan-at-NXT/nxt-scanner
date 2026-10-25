@@ -83,3 +83,13 @@ test("Entfernter Datenträger zählt nicht, kommt nach neuem Scan zurück", () =
   const back = analyze({ disks, projects, diskMeta: [{ disk_uuid: "B", retired_at: "2026-10-01T00:00:00Z", retired_reason: "x" }] });
   assert.equal(back.projects[0].types[0].disks, 2);
 });
+
+test("Kopie mit leeren Dateien (0 Byte) zählt nicht als vollständig", () => {
+  const a = analyze({
+    disks: [disk("A", "VB02"), disk("B", "TOWER 10")],
+    projects: [proj("A", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 260), proj("B", "2026-04-15_DÖRR ROADSHOW_FOOTAGE", 260)],
+    zeroFiles: [{ disk_uuid: "B", rel_path: "NXT STUDIOS/2026-04-15_DÖRR ROADSHOW_FOOTAGE/FX3/C0001.MP4" }],
+  });
+  assert.equal(a.projects[0].types[0].disks, 1);
+  assert.equal(a.projects[0].types[0].copies.find((c) => c.disk_uuid === "B").zero, 1);
+});

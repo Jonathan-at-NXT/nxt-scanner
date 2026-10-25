@@ -91,6 +91,18 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
   const diskList = buildDisks(disks, diskMeta, projects, health);
   const disk = new Map(diskList.map((d) => [d.uuid, d]));
   const ruleBy = new Map(rules.map((r) => [r.rule_key, r]));
+  const zeroIn = new Map();
+  for (const z of zeroFiles) {
+    const parts = String(z.rel_path).split("/");
+    const seen = new Set();
+    for (let k = 0; k < Math.min(3, parts.length - 1); k++) {
+      for (let j = k + 1; j < parts.length; j++) {
+        const key = `${z.disk_uuid}|${parts.slice(k, j).join("/")}`;
+        if (seen.has(key)) continue;
+        seen.add(key); zeroIn.set(key, (zeroIn.get(key) || 0) + 1);
+      }
+    }
+  }
   const stateBy = new Map(states.map((s) => [s.finding_key, s]));
   const findings = [];
   const add = (f) => {
@@ -136,13 +148,17 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       const tmin = SICHERUNG[tsich].min;
       // Volle Kopie = Platte hat (Summe ihrer Ordner dieses Typs) >= FULL_COPY_RATIO der vollständigsten Platte.
       // Tages-Teilkopien (z. B. SSD mit nur einem Drehtag) zählen nicht als Kopie, sondern als "teilweise".
-      const perDisk = new Map();
-      for (const r of rows) perDisk.set(r.disk_uuid, (perDisk.get(r.disk_uuid) || 0) + gb(r.size_bytes));
+      const perDisk = new Map(), zeroDisk = new Map();
+      for (const r of rows) {
+        perDisk.set(r.disk_uuid, (perDisk.get(r.disk_uuid) || 0) + gb(r.size_bytes));
+        zeroDisk.set(r.disk_uuid, (zeroDisk.get(r.disk_uuid) || 0) + (zeroIn.get(`${r.disk_uuid}|${r.rel_path}`) || 0));
+      }
       const fullest = Math.max(0, ...perDisk.values());
       // Sollstand: manuell gewählte Kopie (z. B. ohne bewusst gelöschte Recorder-Daten), sonst die vollständigste
       const ref = refCopies[t] && perDisk.has(refCopies[t]) ? refCopies[t] : null;
       const refGb = ref ? perDisk.get(ref) : fullest;
-      const isFull = (u) => refGb < SMALL_COPY_GB || perDisk.get(u) >= refGb * FULL_COPY_RATIO;
+      // Vollständig nur ohne leere Dateien (0 Byte = Inhalt fehlt) und mit >= 95 % des Sollstands
+      const isFull = (u) => !zeroDisk.get(u) && (refGb < SMALL_COPY_GB || perDisk.get(u) >= refGb * FULL_COPY_RATIO);
       const disksOf = [...perDisk.keys()].filter(isFull);
       const partialDisks = [...perDisk.keys()].filter((u) => !isFull(u));
       const copies = rows.map((r) => ({
@@ -150,6 +166,7 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
         holder: disk.get(r.disk_uuid)?.holder || null, last_scan: disk.get(r.disk_uuid)?.last_scan || null,
         rel_path: r.rel_path, name: r.name, soll_name: r.soll_name || null,
         size_gb: gb(r.size_bytes), files: r.file_count, full: isFull(r.disk_uuid), ref: r.disk_uuid === ref,
+        zero: zeroIn.get(`${r.disk_uuid}|${r.rel_path}`) || 0,
       })).sort((a, b) => (b.full - a.full) || a.disk.localeCompare(b.disk, "de", { numeric: true }));
       const sizes = disksOf.map((u) => Math.round(perDisk.get(u) * 100) / 100);
       const maxGb = Math.round(refGb * 100) / 100;
@@ -167,7 +184,7 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
               disks: disksOf, size_gb: maxGb,
               details: (disksOf.length ? `Vollständig nur auf ${disksOf.map((u) => disk.get(u)?.name || "?").join(", ")} (${fg(maxGb)}), Soll: ${tmin}×`
                                        : `Keine vollständige Kopie, Soll: ${tmin}×`) +
-                       (partialDisks.length ? ` · Teilkopien: ${partialDisks.map((u) => `${disk.get(u)?.name || "?"} (${fg(perDisk.get(u))})`).join(", ")}` : "") });
+                       (partialDisks.length ? ` · Teilkopien: ${partialDisks.map((u) => `${disk.get(u)?.name || "?"} (${fg(perDisk.get(u))}${zeroDisk.get(u) ? `, ${zeroDisk.get(u)} leere Dateien` : ""})`).join(", ")}` : "") });
       }
       if (disksOf.length >= 2 && new Set(sizes).size > 1) {
         const diff = Math.round((Math.max(...sizes) - Math.min(...sizes)) * 100) / 100;
