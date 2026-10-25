@@ -26,3 +26,9 @@ database_id = "82c8542a-1a97-481d-a0dd-1b8c4af9d4bd"
 binding = "CATALOG"
 database_name = "nxt-catalog"
 database_id = "920f10f1-c565-40dc-99b9-f02ce56f00d7"
+
+# Upload-Briefkasten (EU): Zwischenlager bis der Abholer die Datei aufs NAS geschrieben und geprüft hat
+[[r2_buckets]]
+binding = "BRIEFKASTEN"
+bucket_name = "nxt-briefkasten"
+jurisdiction = "eu"

@@ -356,9 +356,33 @@
             <button class="btn small ghost" data-legacy-note="${esc(x.key)}" title="Notiz">✎</button></td></tr>`).join("")}</tbody></table>`
         : `<div class="empty">Keine Projekte in dieser Auswahl.</div>`}</div>`;
     },
+    async upload() {
+      const r = await fetch("/api/briefkasten"); const { links, files, base } = await r.json();
+      const ST = { laeuft: ["warnung", "lädt hoch"], hochgeladen: ["info", "wartet aufs NAS"], abgeholt: ["ok", "auf dem NAS"], fehler: ["kritisch", "Fehler"], abgebrochen: ["", "abgebrochen"] };
+      const nameOf = new Map(links.map((l) => [l.token, l.name]));
+      const active = (l) => l.active && (!l.expires_at || Date.parse(l.expires_at) > Date.now());
+      return `<div class="head"><div><h1>Upload</h1><p>Links zum Hochladen ohne Konto (für Kunden, Creator, Team unterwegs). Dateien landen kurz in einem Cloudflare-Zwischenspeicher (EU),
+        werden automatisch aufs NAS nach <span class="mono">_EINGANG/&lt;Linkname&gt;</span> geholt, dort per Prüfsumme kontrolliert und erst dann im Zwischenspeicher gelöscht.</p></div></div>
+      <div class="panel section"><h3>Neuer Upload-Link</h3><form class="form" id="newlink">
+        <label class="field">Name (= Ordner auf dem NAS)<input name="name" maxlength="120" placeholder="z. B. 2026-10-25_KTM CREATOR CONTENT"></label>
+        <div class="row" style="gap:10px;flex-wrap:wrap"><label class="field">Gültig (Tage)<input name="days" type="number" min="1" max="90" value="14" style="width:90px"></label>
+          <label class="field">Max. GB (optional)<input name="max_gb" type="number" min="1" style="width:110px"></label>
+          <label class="field" style="flex:1">Hinweis für Empfänger (optional)<input name="note" maxlength="300" placeholder="z. B. Bitte alle Karten von Tag 1"></label></div>
+        <div class="row"><button class="btn" type="submit">Link erstellen</button><span id="newlink-out" class="mono"></span></div></form></div>
+      <div class="panel section"><h3>Links</h3>${links.length ? `<table class="table"><thead><tr><th>Name</th><th>Link</th><th class="r">Dateien</th><th class="r">Größe</th><th>Status</th><th></th></tr></thead><tbody>
+        ${links.map((l) => `<tr><td><b>${esc(l.name)}</b><div class="sub">${esc(l.created_by || "")} · bis ${esc(new Date(l.expires_at).toLocaleDateString("de-DE"))}${l.note ? " · " + esc(l.note) : ""}</div></td>
+          <td>${active(l) ? `<button class="btn small ghost" data-copylink="${esc(base + l.token)}">Link kopieren</button>` : '<span class="faint">inaktiv</span>'}</td>
+          <td class="num r">${fmtN(l.files)}</td><td class="num r">${fmtGb(l.bytes / 1e9)}</td>
+          <td class="sub">${l.pulled || 0} auf NAS${l.waiting ? ` · ${l.waiting} warten` : ""}${l.running ? ` · ${l.running} laden` : ""}</td>
+          <td>${active(l) ? `<button class="btn small ghost" data-deactivate="${esc(l.token)}">Deaktivieren</button>` : ""}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">Noch keine Links.</div>'}</div>
+      <div class="panel section"><h3>Letzte Dateien</h3>${files.length ? `<table class="table"><thead><tr><th>Datei</th><th>Link</th><th class="r">Größe</th><th>Status</th></tr></thead><tbody>
+        ${files.map((f) => `<tr><td class="mono" style="word-break:break-all">${esc(f.rel_path)}${f.error ? `<div class="sub" style="color:var(--crit)">${esc(f.error)}</div>` : ""}</td><td>${esc(nameOf.get(f.token) || "")}</td>
+          <td class="num r">${fmtGb(f.size / 1e9)}</td><td><span class="row" style="gap:6px"><span class="dot ${(ST[f.state] || ["", f.state])[0]}"></span>${esc((ST[f.state] || ["", f.state])[1])}</span>
+          <div class="sub">${f.pulled_at ? rel(f.pulled_at) : f.uploaded_at ? rel(f.uploaded_at) : rel(f.created_at)}</div></td></tr>`).join("")}</tbody></table>` : '<div class="empty">Noch nichts hochgeladen.</div>'}</div>`;
+    },
     async protokoll() {
       const r = await fetch("/api/audit"); const { rows } = await r.json();
-      const label = { regel: "Sicherungsregel", datentraeger: "Datenträger", soll_name: "Soll-Name", befund: "Befund", altprojekt: "Altprojekt", antwort: "Antwort an Claude", vorschlag: "Vorschlag" };
+      const label = { regel: "Sicherungsregel", datentraeger: "Datenträger", soll_name: "Soll-Name", befund: "Befund", altprojekt: "Altprojekt", antwort: "Antwort an Claude", vorschlag: "Vorschlag", upload_link: "Upload-Link" };
       return `<div class="head"><div><h1>Protokoll</h1><p>Wer hat wann was geändert. Die letzten 300 Einträge.</p></div></div>
       <div class="panel">${rows.length ? `<table class="table"><thead><tr><th>Wann</th><th>Wer</th><th>Was</th><th>Details</th></tr></thead><tbody>
         ${rows.map((r) => `<tr><td class="num">${esc(new Date(r.at).toLocaleString("de-DE"))}</td><td>${esc(r.who)}</td><td>${esc(label[r.action] || r.action)}</td>
@@ -368,6 +392,25 @@
   };
 
   const LEG_LABEL = (d, k) => d[k] || "offen";
+  document.addEventListener("submit", async (e) => {
+    if (e.target.id !== "newlink") return;
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      const r = await post("/api/briefkasten/link", { name: fd.get("name"), days: fd.get("days"), max_gb: fd.get("max_gb") || null, note: fd.get("note") || null });
+      const link = "https://nxt-scanner-ingest.nxtstudios.workers.dev/u/" + r.token;
+      try { await navigator.clipboard.writeText(link); toast("Link erstellt und kopiert"); } catch { toast("Link erstellt"); }
+      await render(); const out = $("#newlink-out"); if (out) out.textContent = link;
+    } catch (err) { toast(err.message, true); }
+  });
+  document.addEventListener("click", async (e) => {
+    const t = e.target.closest("[data-copylink],[data-deactivate]");
+    if (!t) return;
+    e.preventDefault();
+    if (t.dataset.copylink) { try { await navigator.clipboard.writeText(t.dataset.copylink); toast("Link kopiert"); } catch { window.prompt("Link", t.dataset.copylink); } return; }
+    if (!window.confirm("Link deaktivieren? Bereits Hochgeladenes bleibt erhalten.")) return;
+    try { await post("/api/briefkasten/deactivate", { token: t.dataset.deactivate }); toast("Deaktiviert"); render(); } catch (err) { toast(err.message, true); }
+  });
   const SUGG_KIND = { unbenannt: "Ordner ohne Projektnamen", gleich: "Gleiches Projekt, anderer Name", teilmenge: "Steckt in anderem Projekt" };
   function suggestionsBlock(s) {
     const all = S.suggestions || [];

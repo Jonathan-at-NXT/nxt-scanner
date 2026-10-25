@@ -15,6 +15,7 @@
 
 import { runNotionSync } from "./notion_sync.js";
 import { deriveIfChanged } from "./derive.js";
+import { handleBriefkasten } from "./briefkasten.js";
 
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), {
@@ -237,6 +238,16 @@ export default {
 
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    // Upload-Briefkasten (öffentliche Upload-Links + Abholer)
+    if (url.pathname.startsWith("/u/") || url.pathname.startsWith("/briefkasten/")) {
+      try {
+        const r = await handleBriefkasten(request, env, url, authorized);
+        if (r) return r;
+      } catch (e) {
+        return json({ error: "Fehler im Briefkasten", detail: String(e).slice(0, 300) }, 500);
+      }
+    }
 
     if (url.pathname === "/notion-sync" && request.method === "POST") {
       if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);

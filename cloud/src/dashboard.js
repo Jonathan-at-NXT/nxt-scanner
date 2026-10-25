@@ -263,6 +263,28 @@ async function handleWrite(path, body, env, user) {
     await audit(env, who, "antwort", `Frage ${id}`, { frage: q.question, antwort: answer, notiz: note });
     return { ok: true };
   }
+  // Upload-Briefkasten: Link anlegen / deaktivieren
+  if (path === "/api/briefkasten/link") {
+    const name = clean(body.name, 120);
+    if (!name) throw new Error("Bitte einen Namen angeben (wird zum Ordnernamen auf dem NAS)");
+    const days = Math.min(90, Math.max(1, Number(body.days) || 14));
+    const maxGb = body.max_gb ? Math.max(1, Number(body.max_gb)) : null;
+    const rnd = crypto.getRandomValues(new Uint8Array(18));
+    const token = btoa(String.fromCharCode(...rnd)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const exp = new Date(Date.now() + days * 86400000).toISOString();
+    await env.DB.prepare("INSERT INTO upload_link(token, name, created_by, created_at, expires_at, max_bytes, note, active) VALUES(?,?,?,?,?,?,?,1)")
+      .bind(token, name, who, now(), exp, maxGb ? Math.round(maxGb * 1e9) : null, clean(body.note, 300)).run();
+    await audit(env, who, "upload_link", name, { gueltig_tage: days, max_gb: maxGb });
+    return { ok: true, token };
+  }
+  if (path === "/api/briefkasten/deactivate") {
+    const token = clean(body.token, 80);
+    const l = await env.DB.prepare("SELECT name FROM upload_link WHERE token=?").bind(token).first();
+    if (!l) throw new Error("Link nicht gefunden");
+    await env.DB.prepare("UPDATE upload_link SET active=0 WHERE token=?").bind(token).run();
+    await audit(env, who, "upload_link", l.name, { deaktiviert: true });
+    return { ok: true };
+  }
   if (path === "/api/rules/bulk") {
     const keys = [...new Set((Array.isArray(body.rule_keys) ? body.rule_keys : []).map((k) => clean(k, 300)).filter(Boolean))];
     if (!keys.length || keys.length > 1000) throw new Error("1 bis 1000 Projekte auswählen");
@@ -412,6 +434,15 @@ export default {
           `SELECT * FROM assistant_question WHERE status='offen' OR julianday(answered_at) >= julianday('now','-2 days')
            ORDER BY status='offen' DESC, id DESC LIMIT 30`).all()).results || [];
         return json({ rows });
+      }
+      if (url.pathname === "/api/briefkasten") {
+        const links = (await env.DB.prepare(`SELECT l.*, COUNT(f.id) files, COALESCE(SUM(f.size),0) bytes,
+            SUM(f.state='abgeholt') pulled, SUM(f.state='hochgeladen') waiting, SUM(f.state='laeuft') running, MAX(f.uploaded_at) last_upload
+          FROM upload_link l LEFT JOIN upload_file f ON f.token=l.token AND f.state!='abgebrochen'
+          GROUP BY l.token ORDER BY l.created_at DESC LIMIT 200`).all()).results || [];
+        const files = (await env.DB.prepare(`SELECT f.id, f.token, f.rel_path, f.size, f.state, f.created_at, f.uploaded_at, f.pulled_at, f.nas_path, f.error
+          FROM upload_file f ORDER BY f.id DESC LIMIT 300`).all()).results || [];
+        return json({ links, files, base: "https://nxt-scanner-ingest.nxtstudios.workers.dev/u/" });
       }
       if (url.pathname === "/api/audit") {
         const rows = (await env.DB.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 300").all()).results || [];
