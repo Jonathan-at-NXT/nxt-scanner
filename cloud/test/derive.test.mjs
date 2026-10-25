@@ -55,8 +55,3 @@ test("gültiger Projektordner in unbenanntem Ordner wird gezählt (Logik wie run
   assert.equal(child.type, "FOOTAGE");
 });
 
-  const b = classify({ disk_uuid: "E", rel_path: "2025-03-18_ZELLERFELD X JEFF STAPLE-HONG KONG_FOOTAGE" });
-  assert.equal(a.type, "FOOTAGE");
-  assert.equal(a.project_name, "ZELLERFELD X JEFF STAPLE - HONG KONG");
-  assert.equal(assignClusters([a, b])[0].cluster_id, assignClusters([a, b])[1].cluster_id);
-});
