@@ -242,7 +242,13 @@ export default {
     // Upload-Briefkasten (öffentliche Upload-Links + Abholer)
     if (url.pathname.startsWith("/u/") || url.pathname.startsWith("/briefkasten/")) {
       try {
-        const r = await handleBriefkasten(request, env, url, authorized);
+        // Abholer: Scanner-Schlüssel oder eigener, eingeschränkter NAS-Schlüssel (PICKUP_TOKEN, nur /briefkasten/*)
+        const pickupAuth = (req, e) => {
+          if (authorized(req, e)) return true;
+          const a = req.headers.get("authorization") || "";
+          return !!e.PICKUP_TOKEN && a === `Bearer ${e.PICKUP_TOKEN}`;
+        };
+        const r = await handleBriefkasten(request, env, url, pickupAuth);
         if (r) return r;
       } catch (e) {
         return json({ error: "Fehler im Briefkasten", detail: String(e).slice(0, 300) }, 500);
