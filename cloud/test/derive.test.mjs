@@ -54,3 +54,11 @@ test("gültiger Projektordner in unbenanntem Ordner wird gezählt (Logik wie run
   assert.equal(child.status, "validated");
   assert.equal(child.type, "FOOTAGE");
 });
+
+test("…_FOOTAGE_LIAM gehört als FOOTAGE zum selben Projekt", () => {
+  const a = classify({ disk_uuid: "D", rel_path: "2025-03-18_ZELLERFELD X JEFF STAPLE - HONG KONG_FOOTAGE_LIAM" });
+  const b = classify({ disk_uuid: "E", rel_path: "2025-03-18_ZELLERFELD X JEFF STAPLE-HONG KONG_FOOTAGE" });
+  assert.equal(a.type, "FOOTAGE");
+  assert.equal(a.project_name, "ZELLERFELD X JEFF STAPLE - HONG KONG");
+  assert.equal(assignClusters([a, b])[0].cluster_id, assignClusters([a, b])[1].cluster_id);
+});
