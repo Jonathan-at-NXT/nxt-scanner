@@ -127,6 +127,9 @@ async function loadState(env) {
   const closed = Math.max(0, baseline.shortfall_gb - a.cleanup.balance.shortfall_gb);
   a.cleanup.goal = { baseline, closed_gb: Math.round(closed * 100) / 100,
                      progress: baseline.shortfall_gb > 0 ? Math.min(1, closed / baseline.shortfall_gb) : 1 };
+  // Kennzahlen „nach Inhalt“ (Datei-Katalog, vom Sicherungs-Mac berechnet)
+  try { const cs = await env.DB.prepare("SELECT value FROM meta WHERE key='content_stats'").first(); a.content = cs ? JSON.parse(cs.value) : null; }
+  catch { a.content = null; }
   a.meta = { sicherung: SICHERUNG, tiers: TIERS, generated_at: now(),
              last_scan: disks.reduce((m, d) => (d.last_scan > m ? d.last_scan : m), "") };
   return a;
