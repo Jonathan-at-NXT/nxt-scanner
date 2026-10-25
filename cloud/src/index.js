@@ -384,6 +384,28 @@ export default {
       return json({ ok: true, upserts: ups.length, deletes: dels.length });
     }
 
+    // ── Rückfragen an Jonathan (Bearer INGEST_TOKEN): stellen, abrufen, zurückziehen ──
+    if (url.pathname === "/ingest/question") {
+      if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+      const t = (v, max = 2000) => (v == null ? null : String(v).slice(0, max));
+      if (request.method === "POST") {
+        let b; try { b = await request.json(); } catch { return json({ error: "invalid json" }, 400); }
+        if (b?.withdraw) {
+          await env.DB.prepare("UPDATE assistant_question SET status='zurueckgezogen' WHERE id=? AND status='offen'").bind(Number(b.withdraw)).run();
+          return json({ ok: true });
+        }
+        if (!b?.question) return json({ error: "question fehlt" }, 400);
+        const opts = Array.isArray(b.options) ? b.options.slice(0, 8).map((o) => t(o, 200)) : [];
+        const r = await env.DB.prepare(`INSERT INTO assistant_question(created_at, host, topic, question, details, options)
+          VALUES(?,?,?,?,?,?)`).bind(new Date().toISOString(), t(b.host, 100), t(b.topic, 200), t(b.question, 1000), t(b.details, 4000),
+          JSON.stringify(opts)).run();
+        return json({ ok: true, id: r.meta?.last_row_id });
+      }
+      const id = Number(url.searchParams.get("id"));
+      const row = await env.DB.prepare("SELECT * FROM assistant_question WHERE id=?").bind(id).first();
+      return row ? json(row) : json({ error: "nicht gefunden" }, 404);
+    }
+
     // ── Fortschritt laufender Arbeiten (Bearer INGEST_TOKEN), nur Anzeige ──
     if (url.pathname === "/ingest/progress" && request.method === "POST") {
       if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);

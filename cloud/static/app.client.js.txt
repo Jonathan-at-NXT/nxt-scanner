@@ -353,7 +353,7 @@
     },
     async protokoll() {
       const r = await fetch("/api/audit"); const { rows } = await r.json();
-      const label = { regel: "Sicherungsregel", datentraeger: "Datenträger", soll_name: "Soll-Name", befund: "Befund", altprojekt: "Altprojekt" };
+      const label = { regel: "Sicherungsregel", datentraeger: "Datenträger", soll_name: "Soll-Name", befund: "Befund", altprojekt: "Altprojekt", antwort: "Antwort an Claude", vorschlag: "Vorschlag" };
       return `<div class="head"><div><h1>Protokoll</h1><p>Wer hat wann was geändert. Die letzten 300 Einträge.</p></div></div>
       <div class="panel">${rows.length ? `<table class="table"><thead><tr><th>Wann</th><th>Wer</th><th>Was</th><th>Details</th></tr></thead><tbody>
         ${rows.map((r) => `<tr><td class="num">${esc(new Date(r.at).toLocaleString("de-DE"))}</td><td>${esc(r.who)}</td><td>${esc(label[r.action] || r.action)}</td>
@@ -664,10 +664,13 @@
   load().then(render).catch((e) => { $("#view").innerHTML = `<div class="empty">Konnte Daten nicht laden: ${esc(e.message)}</div>`; });
 
   // ── Laufende Arbeiten: Balken oben, alle 10 s wenn etwas läuft, sonst jede Minute ──
-  const KIND = { inventur: "Erfassung", scan: "Scan", hash: "Prüfsummen", kopie: "Kopie", lesetest: "Lesetest" };
+  const KIND = { inventur: "Erfassung", scan: "Scan", hash: "Prüfsummen", kopie: "Kopie", lesetest: "Lesetest", vorgang: "Vorgang", pruefung: "Prüfung" };
+  // Fortschritt nach Bytes (Kopien, Prüfungen) oder nach Anzahl (Dateien, Ordner, Schritte)
+  const byBytes = (j) => !j.total_files && j.total_bytes > 0;
   const eta = (j, rate) => {
-    if (!j.total_files || !rate) return "";
-    const left = (j.total_files - j.done_files) / rate;
+    const [done, total] = byBytes(j) ? [j.done_bytes || 0, j.total_bytes] : [j.done_files, j.total_files];
+    if (!total || !rate) return "";
+    const left = (total - done) / rate;
     return left > 0 ? ` · noch ~${left > 5400 ? Math.round(left / 3600) + " Std" : Math.max(1, Math.round(left / 60)) + " Min"}` : "";
   };
   async function pollJobs() {
@@ -678,13 +681,16 @@
     box.hidden = !all.length;
     box.innerHTML = all.map((j) => {
       const secs = Math.max(1, (Date.parse(j.updated_at) - Date.parse(j.started_at)) / 1000);
-      const rate = j.done_files / secs;
-      const pct = j.total_files ? Math.min(100, (j.done_files / j.total_files) * 100) : null;
+      const rate = (byBytes(j) ? (j.done_bytes || 0) : j.done_files) / secs;
+      const pct = byBytes(j) ? Math.min(100, ((j.done_bytes || 0) / j.total_bytes) * 100)
+        : j.total_files ? Math.min(100, (j.done_files / j.total_files) * 100) : null;
       const est = j.total_files && j.state === "running" && j.done_files > j.total_files;  // Schätzung überholt
       const status = j._stalled ? "keine Meldung seit " + rel(j.updated_at) : j.state === "done" ? "fertig " + rel(j.updated_at) : j.state === "failed" ? "abgebrochen" : "";
       return `<div class="job ${j.state} ${j._stalled ? "failed" : ""}"><div class="top">
         <span><b>${esc(j.disk_name || "?")}</b> · ${esc(KIND[j.kind] || j.kind)} <span class="faint">auf ${esc(j.host || "?")}</span></span>
-        <span class="num muted">${fmtN(j.done_files)}${j.total_files ? ` von ${est || j.kind === "scan" ? "" : "~"}${fmtN(j.total_files)}` : ""} ${j.kind === "scan" ? "Ordner" : "Dateien · " + fmtGb((j.done_bytes || 0) / 1e9)}
+        <span class="num muted">${byBytes(j) ? `${fmtGb((j.done_bytes || 0) / 1e9)} von ${fmtGb(j.total_bytes / 1e9)}`
+          : j.kind === "vorgang" ? `Schritt ${fmtN(j.done_files)} von ${fmtN(j.total_files || 0)}`
+          : `${fmtN(j.done_files)}${j.total_files ? ` von ${est || j.kind === "scan" ? "" : "~"}${fmtN(j.total_files)}` : ""} ${j.kind === "scan" ? "Ordner" : "Dateien · " + fmtGb((j.done_bytes || 0) / 1e9)}`}
           ${pct != null && j.state === "running" && !est ? ` · <b style="color:var(--text)">${Math.round(pct)} %</b>` : ""}${j.state === "running" && !j._stalled && !est ? eta(j, rate) : ""}
           ${status ? " · " + esc(status) : ""}${j.message ? " · " + esc(j.message) : ""}</span></div>
         <div class="bar ${pct == null || est ? (j.state === "running" && !j._stalled ? "indet" : "") : ""}"><span style="width:${j.state === "done" ? 100 : pct ?? 0}%"></span></div></div>`;
@@ -692,6 +698,34 @@
     setTimeout(pollJobs, data.jobs.some((j) => j.state === "running") ? 10000 : 60000);
   }
   pollJobs();
+
+  // ── Rückfragen des Assistenten ─────────────────
+  async function pollQuestions() {
+    let rows = [];
+    try { rows = (await (await fetch("/api/questions")).json()).rows || []; } catch { return setTimeout(pollQuestions, 60000); }
+    const open = rows.filter((q) => q.status === "offen");
+    const box = $("#questions");
+    box.hidden = !open.length;
+    box.innerHTML = open.map((q) => {
+      let opts = []; try { opts = JSON.parse(q.options || "[]"); } catch {}
+      return `<div class="question"><div class="q-head"><span class="dot warnung"></span><b>Rückfrage${q.topic ? " · " + esc(q.topic) : ""}</b>
+          <span class="faint">${esc(rel(q.created_at))}${q.host ? " · " + esc(q.host) : ""}</span></div>
+        <div class="q-text">${esc(q.question)}</div>${q.details ? `<div class="sub" style="white-space:pre-wrap">${esc(q.details)}</div>` : ""}
+        <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">${opts.map((o) => `<button class="btn small" data-qid="${q.id}" data-qans="${esc(o)}">${esc(o)}</button>`).join("")}</div>
+        <div class="row" style="gap:6px;margin-top:8px"><input type="text" id="qnote-${q.id}" placeholder="Eigene Antwort / Anmerkung" style="flex:1">
+          <button class="btn small ghost" data-qid="${q.id}" data-qans="">Senden</button></div></div>`;
+    }).join("");
+    setTimeout(pollQuestions, open.length ? 15000 : 60000);
+  }
+  document.addEventListener("click", async (e) => {
+    const t = e.target.closest("[data-qid]");
+    if (!t) return;
+    e.preventDefault();
+    const id = t.dataset.qid, note = ($("#qnote-" + id)?.value || "").trim();
+    try { await post("/api/answer", { id: Number(id), answer: t.dataset.qans || null, note: note || null }); toast("Antwort gesendet"); pollQuestions(); }
+    catch (err) { toast(err.message, true); }
+  });
+  pollQuestions();
 
   // Automatisch aktualisieren: jede Minute, nur sichtbarer Tab, nie während Eingabe/Detailansicht
   setInterval(async () => {

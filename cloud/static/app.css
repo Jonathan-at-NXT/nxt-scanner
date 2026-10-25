@@ -222,3 +222,8 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); }
 @keyframes indet { 0% { transform: translateX(-100%) } 100% { transform: translateX(340%) } }
 .job.done { opacity: .6 } .job.failed .bar span { background: var(--crit); }
 .callout { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--ok); border-radius: 8px; background: var(--panel); color: var(--text-2); line-height: 1.5; }
+
+.questions { display: grid; gap: 10px; padding: 12px 16px 0; max-width: 1200px; margin: 0 auto; }
+.question { border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: 10px; background: var(--panel); padding: 12px 14px; }
+.question .q-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.question .q-text { margin-top: 6px; font-size: 15px; color: var(--text); }

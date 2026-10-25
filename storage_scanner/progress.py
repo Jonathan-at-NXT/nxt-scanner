@@ -8,6 +8,7 @@ CLI (z. B. für eine Inventur, die ohne eingebaute Meldung läuft):
 """
 
 import argparse
+import json
 import socket
 import time
 from datetime import datetime
@@ -81,14 +82,56 @@ def watch_catalog(uuid: str, name: str, expected_files: int | None = None, inter
         time.sleep(interval)
 
 
+def _api(method: str, path: str, payload: dict | None = None, params: dict | None = None) -> dict:
+    import httpx
+    from .notion_sync import load_config
+    c = load_config()
+    url, token = c.get("d1_ingest_url", ""), c.get("d1_token", "")
+    if not url or not token:
+        raise SystemExit("D1 nicht eingerichtet")
+    r = httpx.request(method, url.rstrip("/") + path, json=payload, params=params,
+                      headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m storage_scanner.progress")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    o = sub.add_parser("op", help="Schritt eines Vorgangs melden (Balken 'Vorgang' im Dashboard)")
+    o.add_argument("--id", required=True); o.add_argument("--name", required=True)
+    o.add_argument("--step", type=int, required=True); o.add_argument("--steps", type=int, required=True)
+    o.add_argument("--message", default=None); o.add_argument("--state", choices=["running", "done", "failed"], default="running")
+    q = sub.add_parser("ask", help="Rückfrage ins Dashboard stellen, gibt die Frage-ID aus")
+    q.add_argument("question"); q.add_argument("--topic"); q.add_argument("--details")
+    q.add_argument("--option", action="append", default=[])
+    g = sub.add_parser("answer", help="Antwort auf eine Rückfrage abrufen")
+    g.add_argument("id", type=int)
+    wd = sub.add_parser("withdraw", help="Rückfrage zurückziehen"); wd.add_argument("id", type=int)
     w = sub.add_parser("watch", help="Fortschritt einer laufenden Inventur melden")
     w.add_argument("--uuid", required=True); w.add_argument("--name", required=True)
     w.add_argument("--expected-files", type=int)
     w.add_argument("--interval", type=float, default=15.0)
     args = ap.parse_args(argv)
+    if args.cmd == "op":
+        base = {"job_id": f"{socket.gethostname()}|op:{args.id}|vorgang", "host": socket.gethostname(), "kind": "vorgang",
+                "disk_uuid": f"op:{args.id}", "disk_name": args.name, "started_at": _now(),
+                "done_files": args.step, "total_files": args.steps, "done_bytes": 0, "state": args.state,
+                "message": args.message, "updated_at": _now()}
+        print("gemeldet" if _post(base) else "nicht gemeldet")
+        return
+    if args.cmd == "ask":
+        r = _api("POST", "/ingest/question", {"question": args.question, "topic": args.topic, "details": args.details,
+                                               "options": args.option, "host": socket.gethostname()})
+        print(r.get("id"))
+        return
+    if args.cmd == "answer":
+        r = _api("GET", "/ingest/question", params={"id": args.id})
+        print(json.dumps({k: r.get(k) for k in ("status", "answer", "answer_note", "answered_by", "answered_at")}, ensure_ascii=False))
+        return
+    if args.cmd == "withdraw":
+        print(_api("POST", "/ingest/question", {"withdraw": args.id}))
+        return
     if args.cmd == "watch":
         watch_catalog(args.uuid, args.name, args.expected_files, args.interval)
 

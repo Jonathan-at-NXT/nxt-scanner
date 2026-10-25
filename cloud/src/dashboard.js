@@ -250,6 +250,19 @@ async function handleWrite(path, body, env, user) {
     if (body.action === "uebernehmen" && !body.no_derive) await runDerive(env);
     return { ok: true };
   }
+  // Antwort auf eine Rückfrage des Assistenten
+  if (path === "/api/answer") {
+    const id = Number(body.id);
+    const q = await env.DB.prepare("SELECT * FROM assistant_question WHERE id=?").bind(id).first();
+    if (!q) throw new Error("Frage nicht gefunden");
+    if (q.status !== "offen") throw new Error("Frage ist nicht mehr offen");
+    const answer = clean(body.answer, 300), note = clean(body.note, 2000);
+    if (!answer && !note) throw new Error("Bitte eine Antwort wählen oder schreiben");
+    await env.DB.prepare("UPDATE assistant_question SET status='beantwortet', answer=?, answer_note=?, answered_by=?, answered_at=? WHERE id=?")
+      .bind(answer, note, who, now(), id).run();
+    await audit(env, who, "antwort", `Frage ${id}`, { frage: q.question, antwort: answer, notiz: note });
+    return { ok: true };
+  }
   if (path === "/api/rules/bulk") {
     const keys = [...new Set((Array.isArray(body.rule_keys) ? body.rule_keys : []).map((k) => clean(k, 300)).filter(Boolean))];
     if (!keys.length || keys.length > 1000) throw new Error("1 bis 1000 Projekte auswählen");
@@ -393,6 +406,12 @@ export default {
       }
       if (url.pathname === "/api/legacy") {
         return json({ items: await loadLegacy(env), decisions: LEGACY_DECISIONS, cutoff_year: CUTOFF_YEAR });
+      }
+      if (url.pathname === "/api/questions") {
+        const rows = (await env.DB.prepare(
+          `SELECT * FROM assistant_question WHERE status='offen' OR julianday(answered_at) >= julianday('now','-2 days')
+           ORDER BY status='offen' DESC, id DESC LIMIT 30`).all()).results || [];
+        return json({ rows });
       }
       if (url.pathname === "/api/audit") {
         const rows = (await env.DB.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 300").all()).results || [];
