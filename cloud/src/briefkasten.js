@@ -50,12 +50,14 @@ export async function handleBriefkasten(request, env, url, authorized) {
       const n = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null);
       const st = ["running", "done", "failed"].includes(b.state) ? b.state : "running";
       const t = new Date().toISOString();
+      const name = typeof b.name === "string" && b.name ? b.name.slice(0, 80) : "Briefkasten → NAS";
+      const kind = b.name ? "pruefung" : "kopie";
       await env.DB.prepare(`INSERT INTO job_progress(job_id, host, kind, disk_uuid, disk_name, started_at, updated_at, done_files, done_bytes, total_files, total_bytes, state, message)
-        VALUES('NAS|briefkasten|kopie','NAS','kopie','briefkasten','Briefkasten → NAS',?,?,?,?,NULL,?,?,NULL)
+        VALUES('NAS|' || ? || '|' || ?,'NAS',?,'briefkasten',?,?,?,?,?,NULL,?,?,NULL)
         ON CONFLICT(job_id) DO UPDATE SET updated_at=excluded.updated_at, done_files=excluded.done_files, done_bytes=excluded.done_bytes,
           total_bytes=excluded.total_bytes, state=excluded.state,
           started_at=CASE WHEN job_progress.state!='running' THEN excluded.started_at ELSE job_progress.started_at END`)
-        .bind(t, t, n(b.done_files), n(b.done_bytes), n(b.total_bytes), st).run();
+        .bind(name, kind, kind, name, t, t, n(b.done_files), n(b.done_bytes), n(b.total_bytes), st).run();
       return json({ ok: true });
     }
     if (p === "/briefkasten/file") {

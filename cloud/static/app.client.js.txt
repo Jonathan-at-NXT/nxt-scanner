@@ -419,7 +419,8 @@
         <div class="kpi"><div class="label">Frei machbar (Kopien über 2×)</div><div class="value num" style="color:var(--ok)">${fmtGb(c.excess_gb)}</div><div class="sub">${b ? "+ frei auf HDD/NAS " + fmtGb(b.free_gb) : ""}</div></div>
         <div class="kpi"><div class="label">Lücke nach Inhalt (ohne Reserve)</div><div class="value num" style="color:${need > freeable ? "var(--warn)" : "var(--ok)"}">${need > freeable ? fmtGb(need - freeable) : "keine"}</div><div class="sub">${b ? "mit Reserve " + fmtGb(Math.max(0, need - freeable + b.reserve_gb)) : ""}</div></div>
       </div>
-      <p class="hint">Noch nicht abgleichbar: ${fmtN(c.no_catalog_disks || 0)} Datenträger ohne Datei-Katalog (${fmtGb(c.no_catalog_gb || 0)}), Dropbox (${fmtGb(c.dropbox_gb || 0)}).
+      ${c.dropbox_only_gb != null ? `<p class="hint"><b>Dropbox</b> (${fmtGb(c.dropbox_gb)}) zählt nicht als Kopie und ist nicht Teil der Lücke: ${fmtGb(c.dropbox_elsewhere_gb)} liegen auch auf Platten/NAS, ${fmtGb(c.dropbox_only_gb)} nur in der Dropbox – vor dem Leeren nur sichern, was gebraucht wird.</p>` : ""}
+      <p class="hint">Noch nicht abgleichbar: ${fmtN(c.no_catalog_disks || 0)} Datenträger ohne Datei-Katalog (${fmtGb(c.no_catalog_gb || 0)})${c.dropbox_only_gb != null ? "" : `, Dropbox (${fmtGb(c.dropbox_gb || 0)})`}.
         Ordner ohne gültigen Projektnamen: ${fmtGb(c.unnamed_gb || 0)} – Vorschläge dazu unter <a href="#/zuordnen">Zuordnen</a>.</p></div>`;
   }
   document.addEventListener("submit", async (e) => {
