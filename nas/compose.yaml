@@ -1,0 +1,17 @@
+# NXT Upload-Briefkasten – Abholer (holt Uploads aus dem Cloudflare-Zwischenspeicher nach NXT STUDIOS/_EINGANG)
+# PICKUP_TOKEN: eingeschränkter Schlüssel (nur Abholen). Bitte unten beim Einrichten einfügen.
+services:
+  briefkasten:
+    image: python:3.12-alpine
+    container_name: nxt-briefkasten
+    restart: unless-stopped
+    command: ["python", "-u", "/app/nas_pickup.py"]
+    environment:
+      INGEST_URL: "https://nxt-scanner-ingest.nxtstudios.workers.dev"
+      PICKUP_TOKEN: "HIER_SCHLUESSEL_EINFUEGEN"
+      TARGET: "/data/_EINGANG"
+      INTERVAL: "120"
+      TZ: "Europe/Berlin"
+    volumes:
+      - ./nas_pickup.py:/app/nas_pickup.py:ro
+      - ../..:/data
