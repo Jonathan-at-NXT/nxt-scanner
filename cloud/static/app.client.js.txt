@@ -60,8 +60,13 @@
     const crit = S.overview.findings.kritisch;
     const b = $("#badge-befunde"); b.hidden = !crit; b.textContent = crit > 999 ? "999+" : crit;
   }
+  // Abgelaufene Anmeldung (Cloudflare Access leitet um) als klare Meldung statt "Failed to fetch"
+  const LOGIN_EXPIRED = "Anmeldung abgelaufen – bitte Seite neu laden (Eingaben bleiben erhalten)";
   async function post(path, body) {
-    const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    let r;
+    try { r = await fetch(path, { method: "POST", redirect: "manual", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); }
+    catch { throw new Error(LOGIN_EXPIRED); }
+    if (r.type === "opaqueredirect" || r.status === 0 || (r.status >= 300 && r.status < 400)) throw new Error(LOGIN_EXPIRED);
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || "Fehler");
     return j;
