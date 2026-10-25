@@ -66,17 +66,6 @@ export function seqRatio(a, b) {
   return (2.0 * matches) / (la + lb);
 }
 
-/** "…_FOOTAGE_LIAM" / "…_PHOTOS_A7IV": Typ mit Zusatz (Person, Kamera) gehört zum selben Projekt. */
-const TYPED_SUFFIX = /^(.*?)[ _-]+(FOOTAGE|PHOTOS|WORKING|PROXIES|VIDEOS?|FOTOS?)[ _-]+([^_]{1,40})$/i;
-const TYPE_ALIAS = { VIDEO: "FOOTAGE", VIDEOS: "FOOTAGE", FOTO: "PHOTOS", FOTOS: "PHOTOS" };
-export function typedSuffix(v) {
-  if (!v || v.type !== "PROJECT") return v;
-  const m = TYPED_SUFFIX.exec(v.project_name || "");
-  if (!m) return v;
-  const t = m[2].toUpperCase();
-  return { ...v, project_name: m[1].trim(), type: TYPE_ALIAS[t] || t };
-}
-
 /** sollName (optional): manueller Soll-Name aus folder_override; gilt vor dem echten Namen. */
 export function classify(node, sollName = null) {
   const name = (node.rel_path || "").split("/").pop();
@@ -92,7 +81,7 @@ export function classify(node, sollName = null) {
     return out;
   }
   if (CONTAINER.has(norm(name))) { out.status = "container"; return out; }
-  const v = typedSuffix(validateFolder(name));
+  const v = validateFolder(name);
   if (v) Object.assign(out, { date: v.date, project_name: v.project_name, type: v.type, norm_name: norm(v.project_name), status: "validated" });
   return out;
 }
@@ -216,7 +205,7 @@ export async function runDerive(env) {
 
 /** Nur neu ableiten, wenn sich Scans oder Soll-Namen geändert haben (spart D1-Schreibzugriffe). */
 // Bei Änderungen an der Zuordnungslogik hochzählen → nächster Lauf leitet neu ab
-const DERIVE_VERSION = "2026-10-25a";
+const DERIVE_VERSION = "2026-10-25b";
 
 export async function deriveIfChanged(env) {
   const r = await env.DB.prepare(
