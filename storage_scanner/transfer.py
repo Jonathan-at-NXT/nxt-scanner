@@ -274,8 +274,9 @@ def _list_files(root: Path):
             yield p
 
 
-def create_job(conn, src_root: Path, dst_roots: list[Path], note: str = "") -> int:
-    """Legt einen Job an: alle Dateien unter src_root -> gleiche relative Pfade unter jedem Ziel."""
+def create_job(conn, src_root: Path, dst_roots: list[Path], note: str = "", only: set[str] | None = None) -> int:
+    """Legt einen Job an: alle Dateien unter src_root -> gleiche relative Pfade unter jedem Ziel.
+    `only`: nur diese relativen Pfade (z. B. die Dateien, die im Ziel noch fehlen)."""
     src_root = Path(src_root)
     if not src_root.is_dir():
         raise TransferError(f"Quelle nicht gefunden: {src_root}")
@@ -286,8 +287,11 @@ def create_job(conn, src_root: Path, dst_roots: list[Path], note: str = "") -> i
         job_id = cur.lastrowid
         rows = []
         for p in _list_files(src_root):
+            rel = str(p.relative_to(src_root))
+            if only is not None and rel not in only:
+                continue
             st = p.stat()
-            rows.append((job_id, str(p.relative_to(src_root)), st.st_size, st.st_mtime))
+            rows.append((job_id, rel, st.st_size, st.st_mtime))
         conn.executemany(
             "INSERT INTO job_file(job_id,rel_path,size,src_mtime) VALUES(?,?,?,?)", rows)
     return job_id
@@ -376,6 +380,21 @@ def _mark(conn, job_id, rel, state, attempts, err) -> None:
 
 # ── CLI ───────────────────────────────────────────────────────────
 
+def _reporter(conn, job_id: int, note: str):
+    """Fortschritt (Bytes) als Balken ins Dashboard (best effort, gedrosselt)."""
+    from .progress import Reporter
+    total, done_b = conn.execute(
+        "SELECT COALESCE(SUM(size),0), COALESCE(SUM(CASE WHEN state='done' THEN size ELSE 0 END),0) FROM job_file WHERE job_id=?",
+        (job_id,)).fetchone()
+    rep = Reporter("kopie", f"job:{job_id}", note or f"Kopie #{job_id}", total_bytes=total)
+    state = {"b": done_b}
+
+    def cb(n):
+        state["b"] += n
+        rep.update(0, state["b"])
+    return cb
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m storage_scanner.transfer",
                                  description="Sichere, verifizierte, wiederaufnehmbare Kopie")
@@ -384,6 +403,7 @@ def main(argv=None):
     p = sub.add_parser("copy", help="Ordner auf 1-2 Ziele kopieren (neuer Job)")
     p.add_argument("src"); p.add_argument("dst", nargs="+")
     p.add_argument("--note", default="")
+    p.add_argument("--only-file", help="Textdatei mit relativen Pfaden (eine pro Zeile): nur diese kopieren")
     p = sub.add_parser("resume", help="Job fortsetzen")
     p.add_argument("job_id", type=int)
     sub.add_parser("list", help="Jobs anzeigen")
@@ -391,11 +411,14 @@ def main(argv=None):
 
     conn = connect(args.db)
     if args.cmd == "copy":
-        job = create_job(conn, Path(args.src), [Path(d) for d in args.dst], args.note)
+        only = None
+        if args.only_file:
+            only = {l.rstrip("\n") for l in open(args.only_file, encoding="utf-8") if l.strip()}
+        job = create_job(conn, Path(args.src), [Path(d) for d in args.dst], args.note, only=only)
         print(f"Job {job} angelegt")
-        print(run_job(conn, job))
+        print(run_job(conn, job, progress=_reporter(conn, job, args.note)))
     elif args.cmd == "resume":
-        print(run_job(conn, args.job_id))
+        print(run_job(conn, args.job_id, progress=_reporter(conn, args.job_id, "")))
     elif args.cmd == "list":
         for row in conn.execute(
                 """SELECT j.id, j.state, j.src_root, j.dst_roots,
