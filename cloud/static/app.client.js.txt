@@ -19,7 +19,7 @@
     return `${t.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" })}, ${hm}`;
   };
   const TYPE_LABEL = { MISSING_BACKUP: "Nur 1× gesichert", TIER_MISSING: "Pflicht-Stufe fehlt", SIZE_MISMATCH: "Größe weicht ab",
-    INCOMPLETE_BACKUP: "Kopie unvollständig", EXCESS_COPIES: "Zu viele Kopien", PARTIAL_COPY: "Teilkopie überflüssig", REF_EXTRA: "Mehr als Sollstand", UMBENENNEN: "Umbenennen", DUPLICATE_DISK_NAME: "Name doppelt",
+    INCOMPLETE_BACKUP: "Kopie unvollständig", ZERO_FILES: "Leere Dateien (0 Byte)", EXCESS_COPIES: "Zu viele Kopien", PARTIAL_COPY: "Teilkopie überflüssig", REF_EXTRA: "Mehr als Sollstand", UMBENENNEN: "Umbenennen", DUPLICATE_DISK_NAME: "Name doppelt",
     DISK_DEFECT: "Platte defekt", DISK_WARN: "Platte auffällig" };
   const HEALTH = { ok: ["ok", "OK"], warnung: ["warnung", "Auffällig"], defekt: ["kritisch", "Defekt"], unbekannt: ["", "Unbekannt"] };
   const healthBadge = (h) => !h ? '<span class="faint" title="noch nicht geprüft">–</span>'
@@ -380,6 +380,18 @@
           <td class="num r">${fmtGb(f.size / 1e9)}</td><td><span class="row" style="gap:6px"><span class="dot ${(ST[f.state] || ["", f.state])[0]}"></span>${esc((ST[f.state] || ["", f.state])[1])}</span>
           <div class="sub">${f.pulled_at ? rel(f.pulled_at) : f.uploaded_at ? rel(f.uploaded_at) : rel(f.created_at)}</div></td></tr>`).join("")}</tbody></table>` : '<div class="empty">Noch nichts hochgeladen.</div>'}</div>`;
     },
+    async leer(params) {
+      const disk = params.get("d");
+      if (!disk) return `<div class="empty">Kein Datenträger gewählt.</div>`;
+      const r = await (await fetch("/api/zero?disk=" + encodeURIComponent(disk))).json();
+      return `<div class="head"><div><h1>Leere Dateien · ${esc(r.disk)}</h1><p>${fmtN(r.total)} Mediendateien mit 0 Byte (kaputte Kopie, Inhalt fehlt).
+        Für ${fmtN(r.healable)} gibt es eine heile Version mit gleichem Namen im gleichen Ordner auf einem anderen Datenträger – die kann zurückkopiert werden.
+        Ohne Treffer: Dropbox, Team-SSDs oder Karten prüfen.</p></div></div>
+      <div class="panel"><table class="table"><thead><tr><th>Leere Datei</th><th>Heile Version</th></tr></thead><tbody>
+        ${r.items.map((x) => `<tr><td class="mono" style="word-break:break-all">${esc(x.rel_path)}</td>
+          <td>${x.heil.length ? x.heil.map((h) => `<div><b>${esc(h.disk)}</b> <span class="sub">${fmtGb(h.size / 1e9)}</span><div class="sub mono" style="word-break:break-all">${esc(h.rel_path)}</div></div>`).join("")
+            : '<span class="sub" style="color:var(--crit)">nirgends gefunden</span>'}</td></tr>`).join("")}</tbody></table></div>`;
+    },
     async protokoll() {
       const r = await fetch("/api/audit"); const { rows } = await r.json();
       const label = { regel: "Sicherungsregel", datentraeger: "Datenträger", soll_name: "Soll-Name", befund: "Befund", altprojekt: "Altprojekt", antwort: "Antwort an Claude", vorschlag: "Vorschlag", upload_link: "Upload-Link" };
@@ -474,7 +486,7 @@
     return `<div class="finding ${done ? "done" : ""}"><span class="dot ${f.priority}" style="margin-top:7px"></span>
       <div><div class="t">${esc(TYPE_LABEL[f.type] || f.type)}${f.folder_type ? " · " + esc(f.folder_type) : ""}${done ? " · " + esc(f.status) + (f.state_by ? " von " + esc(f.state_by) : "") : ""}</div>
         ${f.project ? `<a class="p" href="#" data-proj="${esc(f.cluster)}">${esc(f.project)}</a>` : ""}
-        <div class="d">${esc(f.details)}</div>${f.state_note ? `<div class="sub">Notiz: ${esc(f.state_note)}</div>` : ""}</div>
+        <div class="d">${esc(f.details)}</div>${f.type === "ZERO_FILES" && f.disks?.[0] ? `<a class="sub" href="#/leer?d=${encodeURIComponent(f.disks[0])}">Liste mit heilen Versionen öffnen</a>` : ""}${f.state_note ? `<div class="sub">Notiz: ${esc(f.state_note)}</div>` : ""}</div>
       <div class="acts">${done ? `<button class="btn small ghost" data-fstate="offen" data-key="${esc(f.key)}">Wieder öffnen</button>`
         : `<button class="btn small" data-fstate="umgesetzt" data-key="${esc(f.key)}">Umgesetzt</button><button class="btn small ghost" data-fstate="ignoriert" data-key="${esc(f.key)}">Ignorieren</button>`}</div></div>`;
   }

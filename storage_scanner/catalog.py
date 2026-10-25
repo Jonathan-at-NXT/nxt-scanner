@@ -787,6 +787,12 @@ SYNC_BATCH = 2000
 # Einzeln hochgeladen werden nur Dateien ab 1 MB (D1 hat max. 10 GB je Datenbank);
 # kleinere stecken in den Ordnersummen von folder_tree, vollständig bleibt der lokale Katalog.
 SYNC_MIN_SIZE = 1_000_000
+# Leere Mediendateien (0 Byte = kaputte Kopie) gehen IMMER mit hoch, damit das Dashboard sie zeigt
+ZERO_KINDS = {"video", "photo", "raw", "audio", "project"}
+
+
+def _upload_row(present, size, kind) -> bool:
+    return bool(present) and ((size or 0) >= SYNC_MIN_SIZE or ((size or 0) == 0 and kind in ZERO_KINDS))
 
 
 def _ensure_sync_table(conn: sqlite3.Connection) -> None:
@@ -816,8 +822,8 @@ def sync_to_d1(conn: sqlite3.Connection, uuid: str, post, host: str = "", batch:
                ORDER BY changed_at, id LIMIT ?""", (uuid, w_ts or "", w_ts or "", w_id or 0, batch)).fetchall()
         last = len(rows) < batch
         payload = {"disk_uuid": uuid, "host": host,
-                   "upserts": [[r[2], r[3], r[4], r[5], r[6]] for r in rows if r[7] and (r[4] or 0) >= SYNC_MIN_SIZE],
-                   "deletes": [r[2] for r in rows if not r[7] or (r[4] or 0) < SYNC_MIN_SIZE]}
+                   "upserts": [[r[2], r[3], r[4], r[5], r[6]] for r in rows if _upload_row(r[7], r[4], r[6])],
+                   "deletes": [r[2] for r in rows if not _upload_row(r[7], r[4], r[6])]}
         if last:
             f, b = conn.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM file WHERE volume_uuid=? AND present=1",
                                 (uuid,)).fetchone()

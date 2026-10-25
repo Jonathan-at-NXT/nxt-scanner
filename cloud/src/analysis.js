@@ -15,7 +15,7 @@ export const SICHERUNG = {
 export const DEFAULT_SICHERUNG = "doppelt";
 export const TIERS = ["SSD", "HDD", "NAS", "CLOUD"];
 export const PRIORITY = { MISSING_BACKUP: "kritisch", TIER_MISSING: "kritisch", SIZE_MISMATCH: "warnung",
-  INCOMPLETE_BACKUP: "warnung", EXCESS_COPIES: "info", PARTIAL_COPY: "info", REF_EXTRA: "info", UMBENENNEN: "info", DUPLICATE_DISK_NAME: "info",
+  INCOMPLETE_BACKUP: "warnung", ZERO_FILES: "warnung", EXCESS_COPIES: "info", PARTIAL_COPY: "info", REF_EXTRA: "info", UMBENENNEN: "info", DUPLICATE_DISK_NAME: "info",
   DISK_DEFECT: "kritisch", DISK_WARN: "warnung" };
 
 const gb = (b) => Math.round(((b || 0) / 1e9) * 100) / 100;
@@ -87,7 +87,7 @@ export function buildDisks(disks, metaRows, projects, healthRows = []) {
 }
 
 /** Projekte je Cluster inkl. Regel, Kopien je Typ, Befunde. */
-export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0 }) {
+export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0, zeroFiles = [] }) {
   const diskList = buildDisks(disks, diskMeta, projects, health);
   const disk = new Map(diskList.map((d) => [d.uuid, d]));
   const ruleBy = new Map(rules.map((r) => [r.rule_key, r]));
@@ -282,6 +282,24 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
           cluster: null, project: null, disks: [d.uuid],
           details: `${d.name}: ${reasons || h.verdict}` +
             (d.only_here ? ` · ${d.only_here} Projekte (${fg(d.only_here_gb)}) liegen nur hier → sofort sichern` : " · alles darauf hat eine 2. Kopie") });
+  }
+
+  // Leere Mediendateien (0 Byte = kaputte Kopie) je Datenträger, aus dem Datei-Katalog
+  const zeroBy = new Map();
+  for (const z of zeroFiles) {
+    if (!zeroBy.has(z.disk_uuid)) zeroBy.set(z.disk_uuid, new Map());
+    const parts = String(z.rel_path).split("/");
+    const folder = parts.slice(0, Math.min(3, parts.length - 1)).join("/") || "(oberste Ebene)";
+    const m = zeroBy.get(z.disk_uuid); m.set(folder, (m.get(folder) || 0) + 1);
+  }
+  for (const d of diskList) {
+    const m = zeroBy.get(d.uuid);
+    d.zero_files = m ? [...m.values()].reduce((s, x) => s + x, 0) : 0;
+    if (!m || d.fallback || d.stale) continue;
+    add({ key: `ZERO_FILES|${d.uuid}`, type: "ZERO_FILES", cluster: null, project: null, disks: [d.uuid],
+          details: `${d.name}: ${d.zero_files} leere Mediendateien (0 Byte, Inhalt fehlt) – ` +
+            [...m].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([f, n]) => `${f} (${n})`).join(", ") +
+            (m.size > 4 ? ` und ${m.size - 4} weitere Ordner` : "") });
   }
 
   // Flotte: gleiche Namen bei verschiedenen Platten

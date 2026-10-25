@@ -27,3 +27,9 @@ fallthrough = true
 type = "Data"
 globs = ["**/*.woff2"]
 fallthrough = true
+
+# Datei-Katalog (EU): für Befunde wie leere Dateien (0 Byte)
+[[d1_databases]]
+binding = "CATALOG"
+database_name = "nxt-catalog"
+database_id = "920f10f1-c565-40dc-99b9-f02ce56f00d7"

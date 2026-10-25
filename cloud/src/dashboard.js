@@ -90,17 +90,20 @@ async function loadState(env) {
   const rm = await env.DB.prepare("SELECT value FROM meta WHERE key='cleanup_reserve_months'").first();
   const reserveMonths = rm ? Number(rm.value) : DEFAULT_RESERVE_MONTHS;
   const legacy = await loadLegacy(env, projects);
+  let zeroFiles = [];
+  try { zeroFiles = env.CATALOG ? ((await env.CATALOG.prepare("SELECT disk_uuid, rel_path FROM files WHERE size=0 LIMIT 50000").all()).results || []) : []; }
+  catch { zeroFiles = []; }
   // Nils' Nummern-Ordner (keine Projekte der Liste): Aussortieren = alle Kopien frei, Nur 1× = alle bis auf eine
   const legacyGb = legacy.filter((x) => x.source === "nummer").reduce((s, x) => s + (x.decision === "aussortieren" ? x.total_gb
     : x.decision === "einfach" ? Math.max(0, x.total_gb - x.size_gb) : 0), 0);
-  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths, legacyGb });
+  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles });
   // Vorschläge aus dem Inhalts-Abgleich: offen und noch ohne Soll-Name
   const ovKeys = new Set(overrides.map((o) => `${o.disk_uuid}|${o.rel_path}`));
   const sugg = (await q("SELECT * FROM content_suggestion WHERE status='offen'")).filter((s) => !ovKeys.has(`${s.disk_uuid}|${s.rel_path}`));
   const dn = new Map(disks.map((d) => [d.uuid, d.name]));
   a.suggestions = sugg.map((s) => ({ ...s, disk: dn.get(s.disk_uuid) || "?" })).sort((x, y) => y.shared_gb - x.shared_gb);
   if (sugg.length) {
-    const b = analyze({ projects: applySuggestions(projects, sugg), disks, diskMeta, rules, states, health, reserveMonths, legacyGb });
+    const b = analyze({ projects: applySuggestions(projects, sugg), disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles });
     const lv = (r) => Object.fromEntries(["einfach", "teilweise", "ok", "mehrfach"].map((k) => [k, r.projects.filter((p) => p.level === k).length]));
     a.cleanup.with_suggestions = { count: sugg.length, balance: b.cleanup.balance, levels: lv(b), levels_now: lv(a) };
   }
@@ -443,6 +446,27 @@ export default {
         const files = (await env.DB.prepare(`SELECT f.id, f.token, f.rel_path, f.size, f.state, f.created_at, f.uploaded_at, f.pulled_at, f.nas_path, f.error
           FROM upload_file f ORDER BY f.id DESC LIMIT 300`).all()).results || [];
         return json({ links, files, base: "https://nxt-scanner-ingest.nxtstudios.workers.dev/u/" });
+      }
+      if (url.pathname === "/api/zero") {
+        // Leere Dateien eines Datenträgers + heile Versionen (gleicher Name, Größe > 0, gleiche letzte Ordnerebene)
+        const disk = url.searchParams.get("disk");
+        const zs = (await env.CATALOG.prepare("SELECT rel_path, name FROM files WHERE disk_uuid=? AND size=0 ORDER BY rel_path LIMIT 3000").bind(disk).all()).results || [];
+        const names = [...new Set(zs.map((z) => z.name))];
+        const cand = new Map();
+        for (let i = 0; i < names.length; i += 90) {
+          const chunk = names.slice(i, i + 90);
+          const rows = (await env.CATALOG.prepare(`SELECT disk_uuid, rel_path, name, size FROM files WHERE size>0 AND name IN (${chunk.map(() => "?").join(",")})`)
+            .bind(...chunk).all()).results || [];
+          for (const r of rows) { if (!cand.has(r.name)) cand.set(r.name, []); cand.get(r.name).push(r); }
+        }
+        const dn = new Map(((await env.DB.prepare("SELECT uuid, name FROM disks").all()).results || []).map((d) => [d.uuid, d.name]));
+        const parent = (p) => p.split("/").slice(-2, -1)[0] || "";
+        const items = zs.map((z) => {
+          const ok = (cand.get(z.name) || []).filter((c) => parent(c.rel_path) === parent(z.rel_path))
+            .map((c) => ({ disk: dn.get(c.disk_uuid) || c.disk_uuid, rel_path: c.rel_path, size: c.size }));
+          return { rel_path: z.rel_path, heil: ok.slice(0, 3) };
+        });
+        return json({ disk: dn.get(disk) || disk, items, total: zs.length, healable: items.filter((x) => x.heil.length).length });
       }
       if (url.pathname === "/api/audit") {
         const rows = (await env.DB.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 300").all()).results || [];

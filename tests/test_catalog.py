@@ -301,3 +301,15 @@ def test_inventory_handles_exfat_inode_above_int64(tmp_path, monkeypatch):
     conn = catalog.connect(":memory:")
     assert catalog.inventory(str(vol), conn)["complete"]
     assert conn.execute("SELECT inode FROM file").fetchone()[0] < 0
+
+
+def test_sync_uploads_zero_byte_media(tmp_path, monkeypatch):
+    vol = tmp_path / "vol"
+    _write(vol, "P/leer.mp4", b"")
+    _write(vol, "P/leer.txt", b"")
+    monkeypatch.setattr(catalog, "volume_info", lambda m, serials=None: _vol("U6", "T6"))
+    conn = catalog.connect(":memory:")
+    catalog.inventory(str(vol), conn)
+    sent = []
+    catalog.sync_to_d1(conn, "U6", lambda p: sent.append(p) or True)
+    assert [u[0] for u in sent[0]["upserts"]] == ["P/leer.mp4"]
