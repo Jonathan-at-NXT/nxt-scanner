@@ -710,6 +710,7 @@
     try { rows = (await (await fetch("/api/questions")).json()).rows || []; } catch { return setTimeout(pollQuestions, 60000); }
     const open = rows.filter((q) => q.status === "offen");
     const box = $("#questions");
+    if (box.contains(document.activeElement)) return setTimeout(pollQuestions, 15000);   // nicht überschreiben, während jemand tippt
     box.hidden = !open.length;
     box.innerHTML = open.map((q) => {
       let opts = []; try { opts = JSON.parse(q.options || "[]"); } catch {}
@@ -717,7 +718,7 @@
           <span class="faint">${esc(rel(q.created_at))}${q.host ? " · " + esc(q.host) : ""}</span></div>
         <div class="q-text">${esc(q.question)}</div>${q.details ? `<div class="sub" style="white-space:pre-wrap">${esc(q.details)}</div>` : ""}
         <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">${opts.map((o) => `<button class="btn small" data-qid="${q.id}" data-qans="${esc(o)}">${esc(o)}</button>`).join("")}</div>
-        <div class="row" style="gap:6px;margin-top:8px"><input type="text" id="qnote-${q.id}" placeholder="Eigene Antwort / Anmerkung" style="flex:1">
+        <div class="row" style="gap:6px;margin-top:8px"><input type="text" id="qnote-${q.id}" data-qdraft="${q.id}" value="${esc(store.get("qdraft-" + q.id, ""))}" placeholder="Eigene Antwort / Anmerkung" style="flex:1">
           <button class="btn small ghost" data-qid="${q.id}" data-qans="">Senden</button></div></div>`;
     }).join("");
     setTimeout(pollQuestions, open.length ? 15000 : 60000);
@@ -727,9 +728,10 @@
     if (!t) return;
     e.preventDefault();
     const id = t.dataset.qid, note = ($("#qnote-" + id)?.value || "").trim();
-    try { await post("/api/answer", { id: Number(id), answer: t.dataset.qans || null, note: note || null }); toast("Antwort gesendet"); pollQuestions(); }
+    try { await post("/api/answer", { id: Number(id), answer: t.dataset.qans || null, note: note || null }); store.set("qdraft-" + id, ""); toast("Antwort gesendet"); pollQuestions(); }
     catch (err) { toast(err.message, true); }
   });
+  document.addEventListener("input", (e) => { const id = e.target.dataset?.qdraft; if (id) store.set("qdraft-" + id, e.target.value); });
   pollQuestions();
 
   // Automatisch aktualisieren: jede Minute, nur sichtbarer Tab, nie während Eingabe/Detailansicht
