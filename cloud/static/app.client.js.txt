@@ -401,9 +401,9 @@
         <div class="panel kpi"><div class="label">Noch offen</div><div class="value num" style="color:var(--warn)">${fmtN(cnt.offen.length + cnt.ansehen.length)}</div><div class="sub">Ordner ohne Auswahl oder „ansehen“</div></div>
       </div>
       <div class="row" style="gap:8px;flex-wrap:wrap;margin:14px 0">${chip("offen", "Offen")}${Object.entries(choices).map(([k, v]) => chip(k, v)).join("")}${chip("alle", "Alle")}</div>
-      <div class="panel">${list.length ? `<table class="table"><thead><tr><th>Ordner</th><th class="r">Größe</th><th>Entscheidung</th></tr></thead><tbody>
-        ${[...groups].map(([k, l]) => `<tr><td colspan="3" style="background:var(--surface-2, transparent)"><b>${esc(k)}</b> <span class="sub">${l.length} Ordner · ${sum(l)}</span></td></tr>${l.map(rowHtml).join("")}`).join("")}
-        </tbody></table>` : `<div class="empty">Keine Ordner in dieser Auswahl.</div>`}</div>`;
+      ${list.length ? [...groups].map(([k, l]) => `<div class="panel section"><h3>${esc(k)} <span class="faint" style="text-transform:none;letter-spacing:0">· ${l.length} Ordner · ${sum(l)}</span></h3>
+        <table class="table"><thead><tr><th>Ordner</th><th class="r">Größe</th><th>Entscheidung</th></tr></thead><tbody>${l.map(rowHtml).join("")}</tbody></table></div>`).join("")
+        : `<div class="panel"><div class="empty">Keine Ordner in dieser Auswahl.</div></div>`}`;
     },
     async upload() {
       const r = await fetch("/api/briefkasten"); const { links, files, base } = await r.json();
