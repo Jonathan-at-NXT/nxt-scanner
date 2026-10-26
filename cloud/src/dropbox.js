@@ -42,10 +42,10 @@ export function dropboxPage(rows, { me = "", generatedAt = new Date().toISOStrin
 <div class="head"><div><h1>Dropbox-Ausstieg</h1><p>Diese Ordner liegen <b>nur</b> in der Dropbox (Dateien ab 50 MB, Abgleich nach Name und Größe mit allen Platten und dem NAS).
 Bevor die Dropbox gekündigt wird, bitte je Ordner wählen: <b>Sichern</b> (wird aufs NAS geladen und 2× gesichert), <b>Darf weg</b> oder <b>Nochmal ansehen</b>.
 Die Notiz speichert beim Verlassen des Feldes. Stand ${esc(new Date(generatedAt).toLocaleString("de-DE", { timeZone: "Europe/Berlin" }))}.</p></div></div>
-<div class="kpis"><div class="kpi"><div class="label">Nur in Dropbox</div><div class="value num">${gb(s.total)}</div><div class="sub">${rows.length} Ordner</div></div>
-<div class="kpi"><div class="label">Sichern</div><div class="value num" style="color:var(--ok)">${gb(s.sichern)}</div></div>
-<div class="kpi"><div class="label">Darf weg</div><div class="value num">${gb(s.loeschen)}</div></div>
-<div class="kpi"><div class="label">Noch offen</div><div class="value num" style="color:var(--warn)">${gb(s.offen + s.ansehen)}</div><div class="sub">${s.offen_n} Ordner ohne Auswahl${s.ansehen ? ` · ${gb(s.ansehen)} ansehen` : ""}</div></div></div>
+<div class="grid kpis"><div class="panel kpi"><div class="label">Nur in Dropbox</div><div class="value num">${gb(s.total)}</div><div class="sub">${rows.length} Ordner</div></div>
+<div class="panel kpi"><div class="label">Sichern</div><div class="value num" style="color:var(--ok)">${gb(s.sichern)}</div></div>
+<div class="panel kpi"><div class="label">Darf weg</div><div class="value num">${gb(s.loeschen)}</div></div>
+<div class="panel kpi"><div class="label">Noch offen</div><div class="value num" style="color:var(--warn)">${gb(s.offen + s.ansehen)}</div><div class="sub">${s.offen_n} Ordner ohne Auswahl${s.ansehen ? ` · ${gb(s.ansehen)} ansehen` : ""}</div></div></div>
 <div class="panel" style="margin-top:18px">${rows.length ? `<table class="table"><thead><tr><th>Ordner</th><th class="r">Größe</th><th>Entscheidung</th></tr></thead>
 <tbody>${body}</tbody></table>` : `<div class="empty">Keine Daten.</div>`}</div>
 <p id="ho-status" class="sub" role="status"></p>

@@ -42,8 +42,8 @@ export function handoverPage(items, person, { me = "", generatedAt = new Date().
 <div class="head"><div><h1>Übergabe an ${esc(who)}</h1><p>Altprojekte, die an ${esc(who)} gehen. Je Projekt bitte auswählen: <b>Aussortieren</b> (darf gelöscht werden),
 <b>Nur 1×</b> (eine Kopie reicht), <b>Behalten (2×)</b> (doppelt sichern) oder <b>Nochmal ansehen</b>. Für alles andere gibt es das Nachrichtenfeld,
 es speichert beim Verlassen des Feldes. Liegt auf: Datenträger und Ordner, die größte Kopie oben. Stand ${esc(new Date(generatedAt).toLocaleString("de-DE", { timeZone: "Europe/Berlin" }))}.</p></div></div>
-<div class="kpis"><div class="kpi"><div class="label">Projekte</div><div class="value num">${list.length}</div><div class="sub">noch ohne Auswahl: ${open}</div></div>
-<div class="kpi"><div class="label">Umfang</div><div class="value num">${gb(total)}</div><div class="sub">je Projekt einmal gezählt</div></div></div>
+<div class="grid kpis"><div class="panel kpi"><div class="label">Projekte</div><div class="value num">${list.length}</div><div class="sub">noch ohne Auswahl: ${open}</div></div>
+<div class="panel kpi"><div class="label">Umfang</div><div class="value num">${gb(total)}</div><div class="sub">je Projekt einmal gezählt</div></div></div>
 <div class="panel" style="margin-top:18px">${list.length ? `<table class="table"><thead><tr><th>Nr. / Datum</th><th>Projekt</th><th class="r">Größe</th><th>Liegt auf</th><th>Entscheidung</th></tr></thead>
 <tbody>${rows}</tbody></table>` : `<div class="empty">Noch keine Projekte für ${esc(who)} ausgewählt.</div>`}</div>
 <p id="ho-status" class="sub" role="status"></p>
