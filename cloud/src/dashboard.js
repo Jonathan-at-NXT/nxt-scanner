@@ -9,13 +9,15 @@
  * POST /api/override     Soll-Name eines Ordners (Zuordnung/Umbenennen)
  * POST /api/finding      Befund als umgesetzt/ignoriert markieren oder wieder öffnen
  * GET  /uebergabe/<person>  Übergabe-Liste (Altprojekte „An Clemens/Paul geben“), eigene Seite
+ * POST /api/handover     Entscheidung + Nachricht von Clemens/Paul zu einem ihrer Projekte
  *
  * Jede Änderung landet mit der Access-E-Mail im audit_log.
  */
 
 import { verifyAccess, devUser } from "./access.js";
 import { legacyProjects, oldProjects, LEGACY_DECISIONS, CUTOFF_YEAR, HANDOVER } from "./legacy.js";
-import { handoverPage } from "./handover.js";
+import { handoverPage, HANDOVER_CHOICES } from "./handover.js";
+import HANDOVER_JS from "../static/handover.js.txt";
 import { analyze, SICHERUNG, TIERS, DEFAULT_RESERVE_MONTHS } from "./analysis.js";
 import { runDerive } from "./derive.js";
 import { validateFolder } from "./notion_sync.js";
@@ -50,18 +52,22 @@ async function audit(env, who, action, target, detail) {
 
 // Altprojekte: Nils' Nummern-Ordner + Projekte bis CUTOFF_YEAR, mit Entscheidungen
 async function loadLegacy(env, projects = null) {
-  const [rows, disks, dec, prj] = await Promise.all([
+  const [rows, disks, dec, ho, prj] = await Promise.all([
     env.DB.prepare(`SELECT disk_uuid, rel_path, size_bytes, file_count FROM folder_tree
                     WHERE depth<=3 AND (rel_path GLOB '[0-9]*' OR rel_path GLOB '*/[0-9]*')`).all().then((r) => r.results || []),
     env.DB.prepare("SELECT uuid, name, last_scan FROM disks").all().then((r) => r.results || []),
     env.DB.prepare("SELECT * FROM legacy_decision").all().then((r) => r.results || []),
+    env.DB.prepare("SELECT * FROM handover_decision").all().then((r) => r.results || []).catch(() => []),
     projects ? Promise.resolve(projects)
       : env.DB.prepare("SELECT disk_uuid, rel_path, date, project_name, status, size_bytes, cluster_id FROM projects").all().then((r) => r.results || []),
   ]);
   const byKey = new Map(dec.map((d) => [d.key, d]));
+  const hoKey = new Map(ho.map((d) => [d.key, d]));
   const items = [...legacyProjects(rows, disks).map((g) => ({ ...g, source: "nummer" })), ...oldProjects(prj, disks)]
     .map((g) => ({ ...g, decision: byKey.get(g.key)?.decision || null, note: byKey.get(g.key)?.note || null,
-                   decided_by: byKey.get(g.key)?.updated_by || null }));
+                   decided_by: byKey.get(g.key)?.updated_by || null,
+                   handover: hoKey.get(g.key) ? { choice: hoKey.get(g.key).choice, message: hoKey.get(g.key).message,
+                                                  by: hoKey.get(g.key).updated_by, at: hoKey.get(g.key).updated_at } : null }));
   return items;
 }
 
@@ -145,6 +151,22 @@ async function readBody(request) {
   return JSON.parse(text);
 }
 
+// Altprojekt aus der Projektliste: Aussortieren = Sicherung "Löschbar", Nur 1× = "Einfach", Behalten = "Doppelt".
+// Wird eine dieser Entscheidungen zurückgenommen, geht die Sicherung wieder auf "Doppelt".
+async function applyLegacyRule(env, who, key, prev, next, via) {
+  if (!key.startsWith("p|") || next === prev) return;
+  const rk = key.slice(2);
+  const rule = (await env.DB.prepare("SELECT sicherung FROM project_rule WHERE rule_key=?").bind(rk).first()) || {};
+  const want = next === "aussortieren" ? "loeschbar" : next === "einfach" ? "einfach" : next === "behalten" ? "doppelt"
+    : ["loeschbar", "einfach"].includes(rule.sicherung) && ["aussortieren", "einfach"].includes(prev) ? "doppelt" : null;
+  if (want && want !== rule.sicherung) {
+    await env.DB.prepare(`INSERT INTO project_rule(rule_key, sicherung, require_tiers, note, updated_by, updated_at) VALUES(?,?,'',NULL,?,?)
+      ON CONFLICT(rule_key) DO UPDATE SET sicherung=excluded.sicherung, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
+      .bind(rk, want, who, now()).run();
+    await audit(env, who, "regel", rk, { sicherung: [rule.sicherung || null, want], via });
+  }
+}
+
 async function handleWrite(path, body, env, user) {
   const who = user.email;
   // Teil-Updates: nur Felder, die im Body stehen, werden geändert. Alles andere bleibt,
@@ -226,19 +248,29 @@ async function handleWrite(path, body, env, user) {
       ON CONFLICT(key) DO UPDATE SET decision=excluded.decision, note=excluded.note, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
       .bind(key, next.decision, next.note, who, now()).run();
     await audit(env, who, "altprojekt", key, { decision: [cur.decision || null, next.decision], note: [cur.note || null, next.note] });
-    // Altprojekt aus der Projektliste: Aussortieren = Sicherung "Löschbar", Behalten = "Doppelt"
-    if (key.startsWith("p|") && "decision" in body && next.decision !== (cur.decision || null)) {
-      const rk = key.slice(2);
-      const rule = (await env.DB.prepare("SELECT sicherung FROM project_rule WHERE rule_key=?").bind(rk).first()) || {};
-      const want = next.decision === "aussortieren" ? "loeschbar" : next.decision === "einfach" ? "einfach" : next.decision === "behalten" ? "doppelt"
-        : ["loeschbar", "einfach"].includes(rule.sicherung) && ["aussortieren", "einfach"].includes(cur.decision) ? "doppelt" : null;
-      if (want && want !== rule.sicherung) {
-        await env.DB.prepare(`INSERT INTO project_rule(rule_key, sicherung, require_tiers, note, updated_by, updated_at) VALUES(?,?,'',NULL,?,?)
-          ON CONFLICT(rule_key) DO UPDATE SET sicherung=excluded.sicherung, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
-          .bind(rk, want, who, now()).run();
-        await audit(env, who, "regel", rk, { sicherung: [rule.sicherung || null, want], via: "Altprojekte" });
-      }
+    if ("decision" in body) await applyLegacyRule(env, who, key, cur.decision || null, next.decision, "Altprojekte");
+    return { ok: true };
+  }
+  // Übergabe-Seite: Clemens/Paul entscheiden selbst (Aussortieren/Nur 1×/Behalten/Ansehen) und können eine Nachricht hinterlassen
+  if (path === "/api/handover") {
+    const key = clean(body.key, 200);
+    const dec = await env.DB.prepare("SELECT decision FROM legacy_decision WHERE key=?").bind(key).first();
+    const person = dec?.decision;
+    if (!key || !(person in HANDOVER)) throw new Error("Projekt ist keiner Person zugeordnet");
+    if (user.only && user.only !== person) throw new Error("Kein Zugriff auf dieses Projekt");
+    const cur = (await env.DB.prepare("SELECT * FROM handover_decision WHERE key=?").bind(key).first()) || {};
+    const next = { choice: cur.choice || null, message: cur.message || null };
+    if ("choice" in body) {
+      if (body.choice != null && !HANDOVER_CHOICES.includes(body.choice)) throw new Error("Unbekannte Auswahl");
+      next.choice = body.choice || null;
     }
+    if ("message" in body) next.message = clean(body.message, 2000);
+    if (next.choice === (cur.choice || null) && next.message === (cur.message || null)) return { ok: true, unchanged: true };
+    await env.DB.prepare(`INSERT INTO handover_decision(key, person, choice, message, updated_by, updated_at) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(key) DO UPDATE SET person=excluded.person, choice=excluded.choice, message=excluded.message, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
+      .bind(key, person, next.choice, next.message, who, now()).run();
+    await audit(env, who, "uebergabe", key, { person, choice: [cur.choice || null, next.choice], message: [cur.message || null, next.message] });
+    if ("choice" in body) await applyLegacyRule(env, who, key, cur.choice || null, next.choice, `Übergabe ${HANDOVER[person]}`);
     return { ok: true };
   }
   // Vorschlag aus dem Inhalts-Abgleich: übernehmen (setzt Soll-Name) oder verwerfen
@@ -419,7 +451,9 @@ export default {
 
     // Übergabe-Seite je Person; externe Betrachter (HANDOVER_VIEWERS) sehen nur ihre eigene
     const ho = /^\/uebergabe\/([a-z]+)\/?$/.exec(url.pathname);
-    if (user.only && !(request.method === "GET" && ((ho && ho[1] === user.only) || ["/app.css", "/outfit.woff2"].includes(url.pathname)))) {
+    const extOk = request.method === "GET" ? (ho && ho[1] === user.only) || ["/app.css", "/outfit.woff2", "/handover.js"].includes(url.pathname)
+      : request.method === "POST" && url.pathname === "/api/handover";
+    if (user.only && !extOk) {
       return respond("Kein Zugriff", "text/plain; charset=utf-8", 403);
     }
     if (request.method === "GET" && ho) {
@@ -431,6 +465,7 @@ export default {
       if (url.pathname === "/" || url.pathname === "/index.html") return respond(APP_HTML, "text/html; charset=utf-8");
       if (url.pathname === "/app.css") return respond(APP_CSS, "text/css; charset=utf-8");
       if (url.pathname === "/app.js") return respond(APP_JS, "text/javascript; charset=utf-8");
+      if (url.pathname === "/handover.js") return respond(HANDOVER_JS, "text/javascript; charset=utf-8");
       if (url.pathname === "/outfit.woff2") return respond(FONT, "font/woff2", 200, { "cache-control": "public, max-age=604800" });
       if (url.pathname === "/api/state") return json({ me: user.email, ...(await loadState(env)) });
       if (url.pathname === "/api/progress") {

@@ -1,0 +1,27 @@
+// Übergabe-Seite: Auswahl und Nachricht je Projekt speichern (POST /api/handover), danach neu laden.
+(() => {
+  const status = (t, err) => { const el = document.getElementById("ho-status"); if (el) { el.textContent = t; el.style.color = err ? "var(--crit)" : ""; } };
+  async function save(body) {
+    status("Speichert …");
+    try {
+      const r = await fetch("/api/handover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || r.status);
+      status("Gespeichert.");
+      return true;
+    } catch (e) { status("Nicht gespeichert: " + e.message, true); return false; }
+  }
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-ho-key]");
+    if (!b) return;
+    b.disabled = true;
+    if (await save({ key: b.dataset.hoKey, choice: b.dataset.hoChoice || null })) location.reload();
+    else b.disabled = false;
+  });
+  document.addEventListener("focusin", (e) => { const t = e.target.closest("[data-ho-msg]"); if (t) t.dataset.orig = t.value; });
+  document.addEventListener("focusout", async (e) => {
+    const t = e.target.closest("[data-ho-msg]");
+    if (!t || t.value === t.dataset.orig) return;
+    if (await save({ key: t.dataset.hoMsg, message: t.value })) t.dataset.orig = t.value;
+  });
+})();

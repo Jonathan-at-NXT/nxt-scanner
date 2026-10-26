@@ -27,8 +27,10 @@ test("Übergabe-Seite zeigt nur Projekte der Person", () => {
     { key: "3|C", num: 3, title: "Gamma", size_gb: 10, decision: "aussortieren", copies: [] },
   ];
   assert.deepEqual(handoverItems(items, "paul").map((x) => x.title), ["Alpha"]);
+  items[1].handover = { choice: "einfach", message: "Rohmaterial <reicht> 1×", by: "c@example.org", at: "2026-10-26T16:00:00Z" };
   const html = handoverPage(items, "clemens");
   assert.ok(html.includes("Beta &lt;x&gt;") && !html.includes("Alpha") && html.includes("2-Beta"));
+  assert.ok(html.includes("Rohmaterial &lt;reicht&gt; 1×") && html.includes('data-ho-choice="aussortieren"') && html.includes("noch ohne Auswahl: 0"));
 });
 
 test("Externe Betrachter nur mit eigener Person", () => {

@@ -352,7 +352,8 @@
       </div>
       <div class="row" style="gap:8px;flex-wrap:wrap;margin:14px 0">${chip("offen", "Offen", cnt.offen)}${Object.entries(decisions).map(([k, v]) => chip(k, v, cnt[k])).join("")}${chip("alle", "Alle", real)}</div>
       <div class="panel">${list.length ? `<table class="table"><thead><tr>${th("legacy", "num", "Nr. / Datum")}${th("legacy", "title", "Projekt")}${th("legacy", "size", "Größe", "r")}${th("legacy", "copies", "Liegt auf")}<th>Entscheidung</th></tr></thead><tbody>
-        ${list.map((x) => `<tr><td class="num">${x.num != null ? x.num : `<span class="sub">${esc(x.date)}</span>`}</td><td><b>${esc(x.title)}</b>${x.note ? `<div class="sub">${esc(x.note)}</div>` : ""}${x.decided_by ? `<div class="sub faint">${esc(LEG_LABEL(decisions, x.decision))} · ${esc(x.decided_by)}</div>` : ""}</td>
+        ${list.map((x) => `<tr><td class="num">${x.num != null ? x.num : `<span class="sub">${esc(x.date)}</span>`}</td><td><b>${esc(x.title)}</b>${x.note ? `<div class="sub">${esc(x.note)}</div>` : ""}${x.decided_by ? `<div class="sub faint">${esc(LEG_LABEL(decisions, x.decision))} · ${esc(x.decided_by)}</div>` : ""}
+          ${x.handover && (x.handover.choice || x.handover.message) ? `<div class="sub" style="color:var(--info, inherit)">${esc(decisions[x.decision] ? decisions[x.decision].replace(/^An | geben$/g, "") : "")}: <b>${esc(x.handover.choice ? decisions[x.handover.choice] : "noch keine Auswahl")}</b>${x.handover.message ? ` – „${esc(x.handover.message)}“` : ""}</div>` : ""}</td>
           <td class="num r">${fmtGb(x.size_gb)}</td>
           <td><span class="tc ${copyClass(x.full_copies)}">${x.full_copies}×</span> <span class="sub">${esc(x.copies.map((c) => `${c.disk}${c.size_gb < x.size_gb * 0.95 ? ` (Teil, ${fmtGb(c.size_gb)})` : ""}`).join(", "))}</span></td>
           <td class="row" style="gap:6px;flex-wrap:wrap">${Object.entries(decisions).map(([k, v]) => `<button class="btn small ${x.decision === k ? "" : "ghost"}" data-legacy-key="${esc(x.key)}" data-legacy-dec="${x.decision === k ? "" : k}" title="${x.decision === k ? "Entscheidung zurücknehmen" : v}">${esc(v)}</button>`).join("")}
@@ -397,7 +398,7 @@
     },
     async protokoll() {
       const r = await fetch("/api/audit"); const { rows } = await r.json();
-      const label = { regel: "Sicherungsregel", datentraeger: "Datenträger", soll_name: "Soll-Name", befund: "Befund", altprojekt: "Altprojekt", antwort: "Antwort an Claude", vorschlag: "Vorschlag", upload_link: "Upload-Link" };
+      const label = { regel: "Sicherungsregel", datentraeger: "Datenträger", soll_name: "Soll-Name", befund: "Befund", altprojekt: "Altprojekt", uebergabe: "Übergabe (Clemens/Paul)", antwort: "Antwort an Claude", vorschlag: "Vorschlag", upload_link: "Upload-Link" };
       return `<div class="head"><div><h1>Protokoll</h1><p>Wer hat wann was geändert. Die letzten 300 Einträge.</p></div></div>
       <div class="panel">${rows.length ? `<table class="table"><thead><tr><th>Wann</th><th>Wer</th><th>Was</th><th>Details</th></tr></thead><tbody>
         ${rows.map((r) => `<tr><td class="num">${esc(new Date(r.at).toLocaleString("de-DE"))}</td><td>${esc(r.who)}</td><td>${esc(label[r.action] || r.action)}</td>
