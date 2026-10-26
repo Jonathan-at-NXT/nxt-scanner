@@ -371,39 +371,60 @@
     async dropbox() {
       const { rows, choices } = await (await fetch("/api/dropbox")).json();
       S.dbx = rows;
+      // Baum: Auswahl gilt für den Ordner und alles darunter, bis ein Unterordner selbst etwas wählt
+      const by = new Map(rows.map((r) => [r.path, { ...r, kids: [] }]));
+      for (const n of by.values()) if (n.parent && by.has(n.parent)) by.get(n.parent).kids.push(n);
+      const eff = (n) => n.choice || (n.parent && by.has(n.parent) ? eff(by.get(n.parent)) : null);
+      for (const n of by.values()) { n.kids.sort((x, y) => y.gb - x.gb); n.own = Math.max(0, n.gb - n.kids.reduce((t, k) => t + k.gb, 0)); n.eff = eff(n); }
+      const tot = { sichern: 0, loeschen: 0, ansehen: 0, offen: 0 };
+      for (const n of by.values()) tot[n.eff || "offen"] += n.own;
+      const roots = [...by.values()].filter((n) => !n.parent || !by.has(n.parent)).sort((x, y) => y.gb - x.gb);
+      const open = new Set(store.get("dbx_open", [])), closed = new Set(store.get("dbx_closed", []));
       const q = ($("#q").value || "").trim().toLowerCase();
-      const sum = (l) => fmtGb(l.reduce((s, x) => s + x.gb, 0));
-      const cnt = { offen: rows.filter((x) => !x.choice), alle: rows };
-      for (const k of Object.keys(choices)) cnt[k] = rows.filter((x) => x.choice === k);
       const f = ui.dbx.f;
-      let list = cnt[f] || rows;
-      if (q) list = list.filter((x) => x.path.toLowerCase().includes(q));
-      const groups = new Map();
-      for (const x of [...list].sort((a, b) => b.gb - a.gb)) {
-        const k = x.path.split("/").slice(0, 2).join(" / ");
-        if (!groups.has(k)) groups.set(k, []);
-        groups.get(k).push(x);
-      }
+      // sichtbar: passt zum Filter (wirksame Auswahl) bzw. zur Suche, oder hat einen passenden Unterordner
+      const hit = (n) => (f === "alle" || (n.eff || "offen") === f) && (!q || n.path.toLowerCase().includes(q));
+      const show = new Map();
+      const vis = (n) => { const v = n.kids.map(vis).some(Boolean) || hit(n); show.set(n.path, v); return v; };
+      roots.forEach(vis);
       const SUG = { sichern: "Vorschlag: sichern", accounts: "accounts, niedrige Priorität", weg: "Vorschlag: darf weg (Proxys)" };
-      const chip = (k, label) => `<button class="chip ${f === k ? "on" : ""}" data-dbx-f="${k}">${label} <b>${(cnt[k] || []).length}</b> <span class="sub">${sum(cnt[k] || [])}</span></button>`;
-      const rowHtml = (x) => `<tr><td><b>${esc(x.path.split("/").slice(2).join("/") || x.path)}</b>
-          <div class="sub">${esc(SUG[x.suggestion] || "")} · ${fmtN(x.files)} Dateien${x.message ? ` · „${esc(x.message)}“` : ""}</div>
-          ${x.updated_by ? `<div class="sub faint">${esc(choices[x.choice] || "Auswahl zurückgenommen")} · ${esc(x.updated_by)} · ${esc(rel(x.updated_at))}</div>` : ""}</td>
-        <td class="num r">${fmtGb(x.gb)}</td>
-        <td class="row" style="gap:6px;flex-wrap:wrap">${Object.entries(choices).map(([k, v]) => `<button class="btn small ${x.choice === k ? "" : "ghost"}" data-dbx-key="${esc(x.path)}" data-dbx-choice="${x.choice === k ? "" : k}" title="${x.choice === k ? "Auswahl zurücknehmen" : esc(v)}">${x.choice === k ? "✓ " : ""}${esc(v)}</button>`).join("")}
-          <button class="btn small ghost" data-dbx-note="${esc(x.path)}" title="Notiz">✎</button></td></tr>`;
+      const row = (n, lvl) => {
+        if (!show.get(n.path)) return "";
+        const kids = n.kids.filter((k) => show.get(k.path));
+        const isOpen = open.has(n.path) || (q && kids.length);
+        const inherited = !n.choice && n.eff;
+        return `<tr><td><div class="row" style="gap:6px;padding-left:${lvl * 18}px;align-items:flex-start">
+            ${kids.length ? `<button class="btn small ghost" data-dbx-toggle="${esc(n.path)}" style="min-width:28px" title="${isOpen ? "Zuklappen" : "Aufklappen"}">${isOpen ? "▾" : "▸"}</button>` : `<span style="display:inline-block;min-width:28px"></span>`}
+            <div><b>${esc(n.path.split("/").pop())}</b>
+            <div class="sub">${esc(SUG[n.suggestion] || "")} · ${fmtN(n.files)} Dateien${kids.length ? ` · ${kids.length} Unterordner` : ""}${n.message ? ` · „${esc(n.message)}“` : ""}</div>
+            ${n.updated_by && n.choice ? `<div class="sub faint">${esc(choices[n.choice])} · ${esc(n.updated_by)} · ${esc(rel(n.updated_at))}</div>` : ""}
+            ${inherited ? `<div class="sub faint">übernommen vom Überordner: ${esc(choices[n.eff])}</div>` : ""}</div></div></td>
+          <td class="num r">${fmtGb(n.gb)}</td>
+          <td class="row" style="gap:6px;flex-wrap:wrap">${Object.entries(choices).map(([k, v]) => `<button class="btn small ${n.choice === k ? "" : "ghost"}" style="${inherited && n.eff === k ? "border-style:dashed" : ""}" data-dbx-key="${esc(n.path)}" data-dbx-choice="${n.choice === k ? "" : k}" title="${n.choice === k ? "Auswahl zurücknehmen" : esc(v)}">${n.choice === k ? "✓ " : ""}${esc(v)}</button>`).join("")}
+            <button class="btn small ghost" data-dbx-note="${esc(n.path)}" title="Notiz">✎</button></td></tr>
+          ${isOpen ? kids.map((k) => row(k, lvl + 1)).join("") : ""}`;
+      };
+      const chip = (k, label, gbv) => `<button class="chip ${f === k ? "on" : ""}" data-dbx-f="${k}">${label} <span class="sub">${fmtGb(gbv)}</span></button>`;
+      const visRoots = roots.filter((n) => show.get(n.path));
       return `<div class="head"><div><h1>Dropbox-Ausstieg</h1><p>Diese Ordner liegen <b>nur</b> in der Dropbox (Dateien ab 50 MB, Abgleich nach Name und Größe mit allen Platten und dem NAS).
-        Vor der Kündigung je Ordner wählen: <b>Sichern</b> (wird aufs NAS geladen und 2× gesichert), <b>Darf weg</b> oder <b>Nochmal ansehen</b>. Ohne Auswahl wird gesichert.</p></div></div>
+        Vor der Kündigung wählen: <b>Sichern</b> (wird aufs NAS geladen und 2× gesichert), <b>Darf weg</b> oder <b>Nochmal ansehen</b>. Eine Auswahl gilt für den Ordner und alles darunter, bis ein Unterordner selbst etwas gewählt hat. Ohne Auswahl wird gesichert.
+        ▸ klappt Unterordner auf, ein Klick auf die Bereichsüberschrift klappt den ganzen Bereich zu.</p></div>
+        <div class="row" style="gap:8px"><button class="btn small ghost" data-dbx-all="open">Alle Bereiche auf</button><button class="btn small ghost" data-dbx-all="close">Alle zu</button></div></div>
       <div class="grid kpis">
-        <div class="panel kpi"><div class="label">Nur in Dropbox</div><div class="value num">${sum(rows)}</div><div class="sub">${fmtN(rows.length)} Ordner</div></div>
-        <div class="panel kpi"><div class="label">Sichern</div><div class="value num" style="color:var(--ok)">${sum(cnt.sichern)}</div><div class="sub">+ ohne Auswahl ${sum(cnt.offen)}</div></div>
-        <div class="panel kpi"><div class="label">Darf weg</div><div class="value num">${sum(cnt.loeschen)}</div></div>
-        <div class="panel kpi"><div class="label">Noch offen</div><div class="value num" style="color:var(--warn)">${fmtN(cnt.offen.length + cnt.ansehen.length)}</div><div class="sub">Ordner ohne Auswahl oder „ansehen“</div></div>
+        <div class="panel kpi"><div class="label">Nur in Dropbox</div><div class="value num">${fmtGb(roots.reduce((t, n) => t + n.gb, 0))}</div><div class="sub">${fmtN(rows.length)} Ordner im Baum</div></div>
+        <div class="panel kpi"><div class="label">Sichern</div><div class="value num" style="color:var(--ok)">${fmtGb(tot.sichern)}</div><div class="sub">+ ohne Auswahl ${fmtGb(tot.offen)}</div></div>
+        <div class="panel kpi"><div class="label">Darf weg</div><div class="value num">${fmtGb(tot.loeschen)}</div></div>
+        <div class="panel kpi"><div class="label">Noch offen</div><div class="value num" style="color:var(--warn)">${fmtGb(tot.offen + tot.ansehen)}</div><div class="sub">ohne Auswahl oder „ansehen“</div></div>
       </div>
-      <div class="row" style="gap:8px;flex-wrap:wrap;margin:14px 0">${chip("offen", "Offen")}${Object.entries(choices).map(([k, v]) => chip(k, v)).join("")}${chip("alle", "Alle")}</div>
-      ${list.length ? [...groups].map(([k, l]) => `<div class="panel section"><h3>${esc(k)} <span class="faint" style="text-transform:none;letter-spacing:0">· ${l.length} Ordner · ${sum(l)}</span></h3>
-        <table class="table"><thead><tr><th>Ordner</th><th class="r">Größe</th><th>Entscheidung</th></tr></thead><tbody>${l.map(rowHtml).join("")}</tbody></table></div>`).join("")
-        : `<div class="panel"><div class="empty">Keine Ordner in dieser Auswahl.</div></div>`}`;
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin:14px 0">${chip("offen", "Offen", tot.offen)}${Object.entries(choices).map(([k, v]) => chip(k, v, tot[k])).join("")}${chip("alle", "Alle", roots.reduce((t, n) => t + n.gb, 0))}</div>
+      ${visRoots.length ? visRoots.map((r) => {
+        const isClosed = closed.has(r.path) && !q;
+        return `<div class="panel section"><h3 data-dbx-sec="${esc(r.path)}" style="cursor:pointer" title="${isClosed ? "Aufklappen" : "Zuklappen"}">${isClosed ? "▸" : "▾"} ${esc(r.path.replace("/", " / "))}
+          <span class="faint" style="text-transform:none;letter-spacing:0">· ${r.kids.length} Ordner · ${fmtGb(r.gb)}</span></h3>
+          ${r.kids.length ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin:-4px 0 10px"><span class="sub">Ganzer Bereich:</span>${Object.entries(choices).map(([k, v]) => `<button class="btn small ${r.choice === k ? "" : "ghost"}" data-dbx-key="${esc(r.path)}" data-dbx-choice="${r.choice === k ? "" : k}">${r.choice === k ? "✓ " : ""}${esc(v)}</button>`).join("")}</div>` : ""}
+          ${isClosed ? "" : `<table class="table"><thead><tr><th>Ordner</th><th class="r">Größe</th><th>Entscheidung</th></tr></thead><tbody>
+            ${r.kids.length ? r.kids.map((k) => row(k, 0)).join("") : row({ ...r, kids: [] }, 0)}</tbody></table>`}</div>`;
+      }).join("") : `<div class="panel"><div class="empty">Keine Ordner in dieser Auswahl.</div></div>`}`;
     },
     async upload() {
       const r = await fetch("/api/briefkasten"); const { links, files, base } = await r.json();
@@ -546,10 +567,17 @@
   });
 
   document.addEventListener("click", async (e) => {
-    const t = e.target.closest("[data-dbx-f],[data-dbx-key],[data-dbx-note]");
+    const t = e.target.closest("[data-dbx-f],[data-dbx-key],[data-dbx-note],[data-dbx-toggle],[data-dbx-sec],[data-dbx-all]");
     if (!t) return;
     e.preventDefault();
     if (t.dataset.dbxF) { ui.dbx.f = t.dataset.dbxF; render(); return; }
+    const flip = (name, key) => { const set = new Set(store.get(name, [])); set.has(key) ? set.delete(key) : set.add(key); store.set(name, [...set]); };
+    if (t.dataset.dbxToggle) { const y = window.scrollY; flip("dbx_open", t.dataset.dbxToggle); await render(); window.scrollTo(0, y); return; }
+    if (t.dataset.dbxSec) { const y = window.scrollY; flip("dbx_closed", t.dataset.dbxSec); await render(); window.scrollTo(0, y); return; }
+    if (t.dataset.dbxAll) {
+      store.set("dbx_closed", t.dataset.dbxAll === "close" ? (S.dbx || []).filter((r) => !r.parent).map((r) => r.path) : []);
+      render(); return;
+    }
     const y = window.scrollY;
     try {
       if (t.dataset.dbxNote) {
