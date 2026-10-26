@@ -42,8 +42,19 @@ export async function verifyAccess(request, env, { fetchImpl = fetch, now = Date
   const email = (payload.email || "").toLowerCase();
   if (!email) throw new Error("keine E-Mail im Token");
   const allowed = (env.ALLOWED_EMAIL_DOMAINS || "nxtstudios.de").split(",").map((d) => d.trim().toLowerCase());
-  if (!allowed.some((d) => email.endsWith("@" + d))) throw new Error("E-Mail-Domain nicht erlaubt");
-  return { email };
+  if (allowed.some((d) => email.endsWith("@" + d))) return { email };
+  const only = handoverViewer(env, email);
+  if (only) return { email, only };
+  throw new Error("E-Mail-Domain nicht erlaubt");
+}
+
+/** Externe Personen, die nur ihre Übergabe-Seite sehen dürfen: HANDOVER_VIEWERS = "paul:a@x.de,clemens:b@y.de". */
+export function handoverViewer(env, email) {
+  for (const part of String(env.HANDOVER_VIEWERS || "").split(",")) {
+    const [person, mail] = part.split(":").map((x) => (x || "").trim().toLowerCase());
+    if (person && mail && mail === email) return person;
+  }
+  return null;
 }
 
 /** Nur für lokale Entwicklung (wrangler dev auf localhost), nie in Produktion. */

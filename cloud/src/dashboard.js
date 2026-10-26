@@ -8,12 +8,14 @@
  * POST /api/disk         Stufe/Halter/Standort/Notiz eines Datenträgers
  * POST /api/override     Soll-Name eines Ordners (Zuordnung/Umbenennen)
  * POST /api/finding      Befund als umgesetzt/ignoriert markieren oder wieder öffnen
+ * GET  /uebergabe/<person>  Übergabe-Liste (Altprojekte „An Clemens/Paul geben“), eigene Seite
  *
  * Jede Änderung landet mit der Access-E-Mail im audit_log.
  */
 
 import { verifyAccess, devUser } from "./access.js";
-import { legacyProjects, oldProjects, LEGACY_DECISIONS, CUTOFF_YEAR } from "./legacy.js";
+import { legacyProjects, oldProjects, LEGACY_DECISIONS, CUTOFF_YEAR, HANDOVER } from "./legacy.js";
+import { handoverPage } from "./handover.js";
 import { analyze, SICHERUNG, TIERS, DEFAULT_RESERVE_MONTHS } from "./analysis.js";
 import { runDerive } from "./derive.js";
 import { validateFolder } from "./notion_sync.js";
@@ -413,6 +415,16 @@ export default {
       user = devUser(request, env) || (await verifyAccess(request, env));
     } catch (e) {
       return respond(`Kein Zugriff: ${e.message}`, "text/plain; charset=utf-8", 403);
+    }
+
+    // Übergabe-Seite je Person; externe Betrachter (HANDOVER_VIEWERS) sehen nur ihre eigene
+    const ho = /^\/uebergabe\/([a-z]+)\/?$/.exec(url.pathname);
+    if (user.only && !(request.method === "GET" && ((ho && ho[1] === user.only) || ["/app.css", "/outfit.woff2"].includes(url.pathname)))) {
+      return respond("Kein Zugriff", "text/plain; charset=utf-8", 403);
+    }
+    if (request.method === "GET" && ho) {
+      if (!(ho[1] in HANDOVER)) return json({ error: "nicht gefunden" }, 404);
+      return respond(handoverPage(await loadLegacy(env), ho[1], { me: user.email }), "text/html; charset=utf-8");
     }
 
     if (request.method === "GET") {
