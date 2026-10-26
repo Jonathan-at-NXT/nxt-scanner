@@ -273,38 +273,10 @@ export default {
       return json({ ok: true });
     }
 
-    // ── Datendashboard (bleibend, read-only, mit VIEW_TOKEN) ──
-    if (url.pathname === "/dashboard.json") {
-      if (url.searchParams.get("key") !== env.VIEW_TOKEN) {
-        return json({ error: "unauthorized" }, 401);
-      }
-      try {
-        return json(await buildDashboard(env));
-      } catch (e) {
-        return json({ error: "dashboard", detail: String(e) }, 500);
-      }
-    }
-    if (url.pathname === "/dashboard") {
-      return new Response(DASHBOARD_HTML, {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
-    }
-
-    // ── Live-DIT-Board (VIEW_TOKEN-gated wie Dashboard) ──
-    if (url.pathname === "/board.json") {
-      if (url.searchParams.get("key") !== env.VIEW_TOKEN) {
-        return json({ error: "unauthorized" }, 401);
-      }
-      try {
-        return json(await buildBoard(env));
-      } catch (e) {
-        return json({ error: "board", detail: String(e) }, 500);
-      }
-    }
-    if (url.pathname === "/board") {
-      return new Response(BOARD_HTML, {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
+    // ── Alte Seiten abgeschaltet (Jonathan 25.10.): Ansicht nur noch im Dashboard nxt-storage ──
+    if (["/dashboard", "/dashboard.json", "/board", "/board.json"].includes(url.pathname)) {
+      return new Response("Abgeschaltet – das Dashboard liegt jetzt unter https://nxt-storage.nxtstudios.workers.dev\n",
+        { status: 410, headers: { "content-type": "text/plain; charset=utf-8" } });
     }
 
     // ── Projekt/Session-Ingest (Bearer INGEST_TOKEN, upsert) ──
