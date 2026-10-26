@@ -191,25 +191,41 @@
       const seg = (k, cls) => `<span class="${cls}" style="width:${(o.copies[k] / tot) * 100}%"></span>`;
       const tiers = Object.entries(o.tier_tb).sort((a, b) => b[1] - a[1]);
       const tierMax = Math.max(1, ...tiers.map((t) => t[1]));
+      const c = S.content, bal = S.cleanup && S.cleanup.balance;
+      const secured = c ? c.two_gb + c.three_gb : 0;
       return `
-      <div class="head"><div><h1>Übersicht</h1><p>Wie gut ist alles gesichert, was fehlt, und wo liegt was.</p></div></div>
-      ${contentPanel(S.cleanup && S.cleanup.balance)}
+      <div class="head"><div><h1>Übersicht</h1><p>Wie viel ist doppelt gesichert, was fehlt noch, und was kann frei werden.${c ? ` Datei-Abgleich: ${rel(c.computed_at)}.` : ""}</p></div></div>
       <div class="grid kpis">
-        <div class="panel kpi ${o.ok === o.projects ? "ok" : ""}"><div class="label">Projekte nach Regel gesichert</div>
-          <div class="value num">${fmtN(o.ok)}<span class="faint" style="font-size:22px"> / ${fmtN(o.projects)}</span></div>
-          <div class="sub">${Math.round((o.ok / Math.max(1, o.projects)) * 100)} % erfüllen ihre Sicherungsregel</div></div>
-        <a class="panel kpi crit" href="#/projekte?f=einfach" style="text-decoration:none"><div class="label">Fehlt noch als 2. Kopie</div>
-          <div class="value num">${fmtTb(o.unsecured_tb)}</div><div class="sub">${fmtN(o.unsecured_full)} Projekte nur 1× · ${fmtN(o.unsecured_partial)} teilweise →</div></a>
-        <a class="panel kpi" href="#/befunde" style="text-decoration:none"><div class="label">Offene Befunde</div>
-          <div class="value num"><span style="color:var(--crit)">${fmtN(o.findings.kritisch)}</span> <span class="faint" style="font-size:22px">kritisch</span></div>
-          <div class="sub">${fmtN(o.findings.warnung)} Warnungen · ${fmtN(o.findings.info)} Infos</div></a>
-        <div class="panel kpi"><div class="label">Einsparpotenzial</div><div class="value num">${fmtTb(o.savings_tb)}</div>
-          <div class="sub">durch überzählige Kopien (mehr als die Regel verlangt)</div></div>
+        ${c ? `<div class="panel kpi"><div class="label">Doppelt gesichert</div>
+          <div class="value num" style="color:var(--ok)">${Math.round((secured / (c.unique_gb || 1)) * 100)} %</div>
+          <div class="sub">${fmtGb(secured)} von ${fmtGb(c.unique_gb)} einmaligem Material</div></div>
+        <a class="panel kpi crit" href="#/projekte?f=einfach" style="text-decoration:none"><div class="label">Fehlt als 2. Kopie</div>
+          <div class="value num">${fmtGb(c.only1_gb)}</div><div class="sub">nur 1× vorhanden →</div></a>
+        <div class="panel kpi"><div class="label">Kann frei werden</div><div class="value num" style="color:var(--ok)">${fmtGb(c.excess_gb)}</div>
+          <div class="sub">Kopien über 2×${bal ? " · dazu frei auf HDD/NAS " + fmtGb(bal.free_gb) : ""}</div></div>` : ""}
         <a class="panel kpi" href="#/datentraeger" style="text-decoration:none"><div class="label">Datenträger</div><div class="value num">${fmtN(o.disks)}</div>
-          <div class="sub">${fmtTb(o.used_tb)} belegt${o.disks_checked ? ` · ${o.disks_defect ? `<span style="color:var(--crit)">${o.disks_defect} defekt</span> · ` : ""}${o.disks_warn ? `${o.disks_warn} auffällig · ` : ""}${o.disks_checked} geprüft` : " · Zustand noch ungeprüft"}</div></a>
+          <div class="sub">${fmtTb(o.used_tb)} belegt${o.disks_defect ? ` · <span style="color:var(--crit)">${o.disks_defect} defekt</span>` : ""}${o.disks_warn ? ` · ${o.disks_warn} auffällig` : ""}</div></a>
       </div>
+      ${c ? `<div class="panel section"><div class="stack" style="height:14px;margin-bottom:8px"><span class="c0" style="width:${(c.only1_gb / (c.unique_gb || 1)) * 100}%"></span><span class="c2" style="width:${(c.two_gb / (c.unique_gb || 1)) * 100}%"></span><span class="c3" style="width:${(c.three_gb / (c.unique_gb || 1)) * 100}%"></span></div>
+        <div class="legend"><span><i class="c0"></i>nur 1× · ${fmtGb(c.only1_gb)}</span><span><i class="c2"></i>genau 2× · ${fmtGb(c.two_gb)}</span><span><i class="c3"></i>3× oder öfter · ${fmtGb(c.three_gb)}</span></div></div>` : ""}
       <div class="grid two section">
-        <div class="panel"><h3>Sicherungsgrad</h3>
+        <div class="panel"><h3>Als Nächstes sichern</h3>
+          ${o.next.length ? `<table class="table"><tbody>${o.next.map((p) => `
+            <tr class="click" data-proj="${esc(p.id)}"><td><div class="name">${esc(p.name)}</div>
+              <div class="sub">${p.level === "teilweise" ? "fehlt: " + esc(p.missing_types.join(", ")) + " · " : ""}${esc(p.disks.join(", "))}</div></td>
+            <td class="r num">${fmtGb(p.missing_gb)}</td><td class="r"><span class="tc ${p.level === "teilweise" ? "c-1" : "c-0"}"><b>${p.level === "teilweise" ? "teilweise" : "nur 1×"}</b></span></td></tr>`).join("")}
+            </tbody></table>` : `<div class="empty">Alles nach Regel gesichert.</div>`}
+        </div>
+        <div class="panel"><h3>Belegung nach Speicherstufe</h3>
+          ${tiers.map(([t, tb]) => `<div style="margin-bottom:12px"><div class="row" style="justify-content:space-between">
+            <span>${tierBadge(t === "unbekannt" ? null : t)} <span class="muted">${t === "unbekannt" ? "ohne Stufe" : ""}</span></span>
+            <span class="num">${fmtTb(tb)}</span></div>
+            <div class="fill" style="width:100%;margin-top:6px"><span style="width:${(tb / tierMax) * 100}%"></span></div></div>`).join("")}
+        </div>
+      </div>
+      <details class="panel section"><summary style="cursor:pointer"><b>Details und Erklärungen</b></summary>
+        ${contentPanel(bal)}
+        <div class="section"><h3>Nach Projekten (Ordnernamen und Sicherungsregel)</h3>
           <div class="stack">${seg("einfach", "c0")}${seg("teilweise", "c1")}${seg("2", "c2")}${seg("3+", "c3")}</div>
           <div class="legend">
             <span><i class="c0"></i>Nur 1× · ${fmtN(o.copies.einfach)} Projekte · ${fmtTb(o.copies_tb.einfach)}</span>
@@ -217,23 +233,12 @@
             <span><i class="c2"></i>2× · ${fmtN(o.copies["2"])} · ${fmtTb(o.copies_tb["2"])}</span>
             <span><i class="c3"></i>3+× · ${fmtN(o.copies["3+"])} · ${fmtTb(o.copies_tb["3+"])}</span>
           </div>
-          <p class="hint">„Teilweise“: einige Ordnertypen sind doppelt gesichert, andere (z. B. WORKING) nur einmal.</p>
-          <div class="section"><h3 style="color:var(--text-2);margin-bottom:10px">Als Nächstes sichern</h3>
-            ${o.next.length ? `<table class="table"><tbody>${o.next.map((p) => `
-              <tr class="click" data-proj="${esc(p.id)}"><td><div class="name">${esc(p.name)}</div>
-                <div class="sub">${p.level === "teilweise" ? "fehlt: " + esc(p.missing_types.join(", ")) + " · " : ""}${esc(p.disks.join(", "))}</div></td>
-              <td class="r num">${fmtGb(p.missing_gb)}</td><td class="r"><span class="tc ${p.level === "teilweise" ? "c-1" : "c-0"}"><b>${p.level === "teilweise" ? "teilweise" : "nur 1×"}</b></span></td></tr>`).join("")}
-              </tbody></table>` : `<div class="empty">Alles nach Regel gesichert.</div>`}
-          </div>
+          <p class="hint">${fmtN(o.ok)} von ${fmtN(o.projects)} Projekten erfüllen ihre Sicherungsregel; nach Regel fehlen ${fmtTb(o.unsecured_tb)}, überzählig sind ${fmtTb(o.savings_tb)}.
+            Diese Sicht kennt nur Ordnernamen und zählt darum anders als der Datei-Abgleich oben. „Teilweise“: einige Ordnertypen sind doppelt gesichert, andere (z. B. WORKING) nur einmal.
+            Offene Befunde: ${fmtN(o.findings.kritisch)} kritisch, ${fmtN(o.findings.warnung)} Warnungen (<a href="#/befunde">Befunde</a>).
+            Speicherstufen setzt ihr unter Datenträger; ohne Angabe wird sie aus dem Namen geschätzt (TOWER/HUB → HDD, NXT ### → SSD).</p>
         </div>
-        <div class="panel"><h3>Belegung nach Speicherstufe</h3>
-          ${tiers.map(([t, tb]) => `<div style="margin-bottom:12px"><div class="row" style="justify-content:space-between">
-            <span>${tierBadge(t === "unbekannt" ? null : t)} <span class="muted">${t === "unbekannt" ? "ohne Stufe" : ""}</span></span>
-            <span class="num">${fmtTb(tb)}</span></div>
-            <div class="fill" style="width:100%;margin-top:6px"><span style="width:${(tb / tierMax) * 100}%"></span></div></div>`).join("")}
-          <p class="hint">Stufen setzt ihr unter Datenträger. Ohne Angabe wird sie aus dem Namen geschätzt (TOWER/HUB → HDD, NXT ### → SSD).</p>
-        </div>
-      </div>`;
+      </details>`;
     },
 
     projekte(params) {
@@ -413,17 +418,10 @@
   const LEG_LABEL = (d, k) => d[k] || "offen";
   function contentPanel(b) {
     const c = S.content; if (!c) return "";
-    const T = c.unique_gb || 1, pct = (x) => Math.round((x / T) * 100);
     const need = c.only1_gb, freeable = c.excess_gb + (b ? b.free_gb : 0);
-    return `<div class="panel section"><h3>Nach Inhalt (Datei-Katalog)</h3>
+    return `<div class="section"><h3>Nach Inhalt (Datei-Katalog)</h3>
       <p class="hint" style="margin-top:0">Abgleich Datei für Datei (Name + Größe, Dateien ab ${c.min_file_mb} MB) über ${fmtN(c.catalog_disks)} Datenträger – findet auch Kopien unter anderem Namen. Stand ${rel(c.computed_at)}.</p>
-      <div class="stack" style="height:14px;margin:6px 0 8px"><span class="c0" style="width:${pct(c.only1_gb)}%"></span><span class="c2" style="width:${pct(c.two_gb)}%"></span><span class="c3" style="width:${pct(c.three_gb)}%"></span></div>
-      <div class="legend"><span><i class="c0"></i>nur 1× · ${fmtGb(c.only1_gb)}</span><span><i class="c2"></i>genau 2× · ${fmtGb(c.two_gb)}</span><span><i class="c3"></i>3× oder öfter · ${fmtGb(c.three_gb)}</span></div>
-      <div class="balance" style="margin-top:12px">
-        <div class="kpi"><div class="label">Fehlt als 2. Kopie (nach Inhalt)</div><div class="value num" style="color:var(--crit)">${fmtGb(need)}</div><div class="sub">einmaliges Material ${fmtGb(c.unique_gb)}</div></div>
-        <div class="kpi"><div class="label">Frei machbar (Kopien über 2×)</div><div class="value num" style="color:var(--ok)">${fmtGb(c.excess_gb)}</div><div class="sub">${b ? "+ frei auf HDD/NAS " + fmtGb(b.free_gb) : ""}</div></div>
-        <div class="kpi"><div class="label">Lücke nach Inhalt (ohne Reserve)</div><div class="value num" style="color:${need > freeable ? "var(--warn)" : "var(--ok)"}">${need > freeable ? fmtGb(need - freeable) : "keine"}</div><div class="sub">${b ? "mit Reserve " + fmtGb(Math.max(0, need - freeable + b.reserve_gb)) : ""}</div></div>
-      </div>
+      <p class="hint"><b>Platz-Lücke:</b> ${need > freeable ? fmtGb(need - freeable) + " fehlen, um alles 2× abzulegen" : "keine, der freie und frei werdende Platz reicht"}${b ? " (mit 5 % Reserve je Platte: " + fmtGb(Math.max(0, need - freeable + b.reserve_gb)) + ")" : ""}.</p>
       ${c.dropbox_only_gb != null ? `<p class="hint"><b>Dropbox</b> (${fmtGb(c.dropbox_gb)}) zählt nicht als Kopie und ist nicht Teil der Lücke: ${fmtGb(c.dropbox_elsewhere_gb)} liegen auch auf Platten/NAS, ${fmtGb(c.dropbox_only_gb)} nur in der Dropbox – vor dem Leeren nur sichern, was gebraucht wird.</p>` : ""}
       <p class="hint">Noch nicht abgleichbar: ${fmtN(c.no_catalog_disks || 0)} Datenträger ohne Datei-Katalog (${fmtGb(c.no_catalog_gb || 0)})${c.dropbox_only_gb != null ? "" : `, Dropbox (${fmtGb(c.dropbox_gb || 0)})`}.
         Ordner ohne gültigen Projektnamen: ${fmtGb(c.unnamed_gb || 0)} – Vorschläge dazu unter <a href="#/zuordnen">Zuordnen</a>.</p></div>`;
