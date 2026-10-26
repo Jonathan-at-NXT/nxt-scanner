@@ -101,6 +101,17 @@ def _no_cache(f) -> None:
         pass
 
 
+def _clear_flags(path: Path) -> int:
+    """Entfernt BSD-Datei-Flags (z. B. uchg) und gibt die alten zurück (0 = keine / nicht unterstützt)."""
+    try:
+        flags = os.lstat(path).st_flags
+        if flags:
+            os.chflags(path, 0)
+        return flags
+    except (OSError, AttributeError):
+        return 0
+
+
 def file_hash(path: Path, chunk: int = _CHUNK) -> str:
     """Voller blake2b-256 über alle Bytes, ohne Cache."""
     h = hashlib.blake2b(digest_size=32)
@@ -128,6 +139,7 @@ def safe_copy(src: Path, dsts: list[Path], chunk: int = _CHUNK, progress=None,
     for d in map(Path, dsts):
         tmp = d.with_name(d.name + TMP_SUFFIX)
         if tmp.exists():
+            _clear_flags(tmp)
             tmp.unlink()  # Rest eines abgebrochenen Laufs, nie vertrauenswürdig
         if d.exists():
             if d.stat().st_size != st0.st_size:
@@ -183,7 +195,15 @@ def safe_copy(src: Path, dsts: list[Path], chunk: int = _CHUNK, progress=None,
                 pass  # exFAT kennt nicht alle Attribute; Inhalt ist verifiziert
             if d.exists():
                 raise Collision(f"Ziel ist während der Kopie aufgetaucht: {d}")
+            # Gesperrte Dateien (chflags uchg, z. B. SONYCARD.IND) lassen sich nicht umbenennen:
+            # Sperre erst nach dem Umbenennen wieder setzen
+            flags = _clear_flags(tmp)
             os.rename(tmp, d)
+            if flags:
+                try:
+                    os.chflags(d, flags)
+                except OSError:
+                    pass
             _fsync_dir(d.parent)
         tmps = []
         return {"hash": digest, "copied": list(todo), "skipped": skipped}
@@ -195,6 +215,7 @@ def safe_copy(src: Path, dsts: list[Path], chunk: int = _CHUNK, progress=None,
                 pass
         for tmp in tmps:
             try:
+                _clear_flags(tmp)
                 tmp.unlink()
             except OSError:
                 pass

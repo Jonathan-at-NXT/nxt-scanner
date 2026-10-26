@@ -140,3 +140,21 @@ from contextlib import contextmanager  # noqa: E402
 @contextmanager
 def _noop_cm():
     yield
+
+
+def test_gesperrte_quelle_wird_kopiert_und_bleibt_gesperrt(tmp_path):
+    import os
+    import stat
+    src = tmp_path / "SONYCARD.IND"
+    src.write_bytes(b"")
+    os.chflags(src, stat.UF_IMMUTABLE)
+    dst = tmp_path / "out" / "SONYCARD.IND"
+    try:
+        res = transfer.safe_copy(src, [dst])
+        assert res["copied"] == [dst] and dst.exists()
+        assert os.lstat(dst).st_flags & stat.UF_IMMUTABLE
+        assert not (tmp_path / "out" / ("SONYCARD.IND" + transfer.TMP_SUFFIX)).exists()
+    finally:
+        for p in (src, dst):
+            if p.exists():
+                os.chflags(p, 0)
