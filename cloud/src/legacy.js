@@ -60,9 +60,11 @@ export const LEGACY_DECISIONS = { aussortieren: "Aussortieren", einfach: "Nur 1�
 // Übergabe an Personen: eigene Seite /uebergabe/<key> je Person
 export const HANDOVER = { clemens: "Clemens", paul: "Paul" };
 
-// Projekte mit Datum bis einschließlich CUTOFF_YEAR (aus der Projektliste) zählen ebenfalls als Altprojekte.
-export const CUTOFF_YEAR = 2023;
-export function oldProjects(projects, disks) {
+// Projekte mit Datum bis einschließlich Stichmonat (aus der Projektliste) zählen ebenfalls als Altprojekte.
+// Der Stichmonat ist im Dashboard wählbar ("YYYY-MM"), Standard Ende 2023.
+export const DEFAULT_CUTOFF = "2023-12";
+export const validCutoff = (v) => (/^\d{4}-(0[1-9]|1[0-2])$/.test(String(v || "")) ? String(v) : null);
+export function oldProjects(projects, disks, cutoff = DEFAULT_CUTOFF) {
   const live = new Set();
   const newest = new Map();
   for (const d of disks) {
@@ -74,7 +76,7 @@ export function oldProjects(projects, disks) {
   const name = new Map(disks.map((d) => [d.uuid, d.name]));
   const byCl = new Map();
   for (const p of projects) {
-    if (p.status !== "validated" || !p.cluster_id || !p.date || Number(p.date.slice(0, 4)) > CUTOFF_YEAR || !live.has(p.disk_uuid)) continue;
+    if (p.status !== "validated" || !p.cluster_id || !p.date || p.date.slice(0, 7) > cutoff || !live.has(p.disk_uuid)) continue;
     if (!byCl.has(p.cluster_id)) byCl.set(p.cluster_id, { rows: [], names: new Set(), date: p.date });
     const g = byCl.get(p.cluster_id);
     g.rows.push(p); g.names.add(p.project_name);

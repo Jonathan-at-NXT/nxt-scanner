@@ -15,7 +15,7 @@
  */
 
 import { verifyAccess, devUser } from "./access.js";
-import { legacyProjects, oldProjects, LEGACY_DECISIONS, CUTOFF_YEAR, HANDOVER } from "./legacy.js";
+import { legacyProjects, oldProjects, LEGACY_DECISIONS, DEFAULT_CUTOFF, validCutoff, HANDOVER } from "./legacy.js";
 import { handoverPage, HANDOVER_CHOICES } from "./handover.js";
 import HANDOVER_JS from "../static/handover.js.txt";
 import { analyze, SICHERUNG, TIERS, DEFAULT_RESERVE_MONTHS } from "./analysis.js";
@@ -50,8 +50,8 @@ async function audit(env, who, action, target, detail) {
     .bind(now(), who, action, target, JSON.stringify(detail)).run();
 }
 
-// Altprojekte: Nils' Nummern-Ordner + Projekte bis CUTOFF_YEAR, mit Entscheidungen
-async function loadLegacy(env, projects = null) {
+// Altprojekte: Nils' Nummern-Ordner + Projekte bis zum Stichmonat (YYYY-MM), mit Entscheidungen
+async function loadLegacy(env, projects = null, cutoff = DEFAULT_CUTOFF) {
   const [rows, disks, dec, ho, prj] = await Promise.all([
     env.DB.prepare(`SELECT disk_uuid, rel_path, size_bytes, file_count FROM folder_tree
                     WHERE depth<=3 AND (rel_path GLOB '[0-9]*' OR rel_path GLOB '*/[0-9]*')`).all().then((r) => r.results || []),
@@ -63,7 +63,7 @@ async function loadLegacy(env, projects = null) {
   ]);
   const byKey = new Map(dec.map((d) => [d.key, d]));
   const hoKey = new Map(ho.map((d) => [d.key, d]));
-  const items = [...legacyProjects(rows, disks).map((g) => ({ ...g, source: "nummer" })), ...oldProjects(prj, disks)]
+  const items = [...legacyProjects(rows, disks).map((g) => ({ ...g, source: "nummer" })), ...oldProjects(prj, disks, cutoff)]
     .map((g) => ({ ...g, decision: byKey.get(g.key)?.decision || null, note: byKey.get(g.key)?.note || null,
                    decided_by: byKey.get(g.key)?.updated_by || null,
                    handover: hoKey.get(g.key) ? { choice: hoKey.get(g.key).choice, message: hoKey.get(g.key).message,
@@ -458,7 +458,7 @@ export default {
     }
     if (request.method === "GET" && ho) {
       if (!(ho[1] in HANDOVER)) return json({ error: "nicht gefunden" }, 404);
-      return respond(handoverPage(await loadLegacy(env), ho[1], { me: user.email }), "text/html; charset=utf-8");
+      return respond(handoverPage(await loadLegacy(env, null, "9999-12"), ho[1], { me: user.email }), "text/html; charset=utf-8");
     }
 
     if (request.method === "GET") {
@@ -480,7 +480,8 @@ export default {
         return json({ jobs: rows, stalled: stale });
       }
       if (url.pathname === "/api/legacy") {
-        return json({ items: await loadLegacy(env), decisions: LEGACY_DECISIONS, cutoff_year: CUTOFF_YEAR });
+        const cutoff = validCutoff(url.searchParams.get("bis")) || DEFAULT_CUTOFF;
+        return json({ items: await loadLegacy(env, null, cutoff), decisions: LEGACY_DECISIONS, cutoff, default_cutoff: DEFAULT_CUTOFF });
       }
       if (url.pathname === "/api/questions") {
         const rows = (await env.DB.prepare(

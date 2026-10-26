@@ -40,3 +40,17 @@ test("Externe Betrachter nur mit eigener Person", () => {
   assert.equal(handoverViewer(env, "x@example.com"), null);
   assert.equal(handoverViewer({}, "paul@example.com"), null);
 });
+
+import { oldProjects, validCutoff } from "../src/legacy.js";
+
+test("Altprojekte bis zum gewählten Stichmonat", () => {
+  const dk = [{ uuid: "T1", name: "Tower 1", last_scan: "2026-10-24" }];
+  const p = (cl, date) => ({ disk_uuid: "T1", rel_path: `${date}_${cl}_FOOTAGE`, date, project_name: cl, status: "validated", size_bytes: 10e9, cluster_id: cl });
+  const prj = [p("A", "2023-11-02"), p("B", "2024-02-20"), p("C", "2024-03-01")];
+  assert.deepEqual(oldProjects(prj, dk).map((x) => x.title), ["A"]);
+  assert.deepEqual(oldProjects(prj, dk, "2024-02").map((x) => x.title).sort(), ["A", "B"]);
+  assert.equal(oldProjects(prj, dk, "2024-02")[0].copies[0].path.includes("_FOOTAGE"), true);
+  assert.equal(validCutoff("2024-02"), "2024-02");
+  assert.equal(validCutoff("2024-13"), null);
+  assert.equal(validCutoff("x' OR 1"), null);
+});
