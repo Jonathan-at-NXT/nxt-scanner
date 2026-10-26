@@ -10,6 +10,8 @@
  * POST /api/finding      Befund als umgesetzt/ignoriert markieren oder wieder öffnen
  * GET  /uebergabe/<person>  Übergabe-Liste (Altprojekte „An Clemens/Paul geben“), eigene Seite
  * POST /api/handover     Entscheidung + Nachricht von Clemens/Paul zu einem ihrer Projekte
+ * GET  /dropbox          Dropbox-Ausstieg: je Ordner (nur in Dropbox) sichern / darf weg / ansehen
+ * POST /api/dropbox      Entscheidung + Notiz zu einem Dropbox-Ordner
  *
  * Jede Änderung landet mit der Access-E-Mail im audit_log.
  */
@@ -18,6 +20,7 @@ import { verifyAccess, devUser } from "./access.js";
 import { legacyProjects, oldProjects, LEGACY_DECISIONS, DEFAULT_CUTOFF, validCutoff, HANDOVER } from "./legacy.js";
 import { handoverPage, HANDOVER_CHOICES } from "./handover.js";
 import HANDOVER_JS from "../static/handover.js.txt";
+import { dropboxPage, DROPBOX_CHOICES } from "./dropbox.js";
 import { analyze, SICHERUNG, TIERS, DEFAULT_RESERVE_MONTHS } from "./analysis.js";
 import { runDerive } from "./derive.js";
 import { validateFolder } from "./notion_sync.js";
@@ -262,6 +265,21 @@ async function handleWrite(path, body, env, user) {
     return { ok: true };
   }
   // Übergabe-Seite: Clemens/Paul entscheiden selbst (Aussortieren/Nur 1×/Behalten/Ansehen) und können eine Nachricht hinterlassen
+  if (path === "/api/dropbox") {
+    const key = String(body.key || "").slice(0, 1000);
+    const cur = await env.DB.prepare("SELECT * FROM dropbox_folder WHERE path=?").bind(key).first();
+    if (!cur) throw new Error("Ordner unbekannt");
+    const next = { choice: cur.choice || null, message: cur.message || null };
+    if ("choice" in body) {
+      if (body.choice != null && body.choice !== "" && !(body.choice in DROPBOX_CHOICES)) throw new Error("Unbekannte Auswahl");
+      next.choice = body.choice || null;
+    }
+    if ("message" in body) next.message = clean(body.message, 2000);
+    await env.DB.prepare("UPDATE dropbox_folder SET choice=?, message=?, updated_by=?, updated_at=? WHERE path=?")
+      .bind(next.choice, next.message, who, now(), key).run();
+    await audit(env, who, "dropbox", key, { choice: [cur.choice || null, next.choice], message: [cur.message || null, next.message] });
+    return { ok: true };
+  }
   if (path === "/api/handover") {
     const key = clean(body.key, 200);
     const dec = await env.DB.prepare("SELECT decision FROM legacy_decision WHERE key=?").bind(key).first();
@@ -476,6 +494,10 @@ export default {
       if (url.pathname === "/app.css") return respond(APP_CSS, "text/css; charset=utf-8");
       if (url.pathname === "/app.js") return respond(APP_JS, "text/javascript; charset=utf-8");
       if (url.pathname === "/handover.js") return respond(HANDOVER_JS, "text/javascript; charset=utf-8");
+      if (url.pathname === "/dropbox" || url.pathname === "/dropbox/") {
+        const rows = (await env.DB.prepare("SELECT * FROM dropbox_folder").all()).results || [];
+        return respond(dropboxPage(rows, { me: user.email }), "text/html; charset=utf-8");
+      }
       if (url.pathname === "/outfit.woff2") return respond(FONT, "font/woff2", 200, { "cache-control": "public, max-age=604800" });
       if (url.pathname === "/api/state") return json({ me: user.email, ...(await loadState(env)) });
       if (url.pathname === "/api/progress") {

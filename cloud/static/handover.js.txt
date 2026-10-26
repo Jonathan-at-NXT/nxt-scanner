@@ -4,7 +4,7 @@
   async function save(body) {
     status("Speichert …");
     try {
-      const r = await fetch("/api/handover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const r = await fetch(window.HO_API || "/api/handover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const j = await r.json();
       if (!r.ok || j.error) throw new Error(j.error || r.status);
       status("Gespeichert.");

@@ -194,7 +194,7 @@
       const c = S.content, bal = S.cleanup && S.cleanup.balance;
       const secured = c ? c.two_gb + c.three_gb : 0;
       return `
-      <div class="head"><div><h1>Übersicht</h1><p>Wie viel ist doppelt gesichert, was fehlt noch, und was kann frei werden.${c ? ` Datei-Abgleich: ${rel(c.computed_at)}.` : ""}</p></div></div>
+      <div class="head"><div><h1>Übersicht</h1><p>Wie viel ist doppelt gesichert, was fehlt noch, und was kann frei werden.${c ? ` Datei-Abgleich: ${rel(c.computed_at)}.` : ""} <a href="/dropbox">Dropbox-Ausstieg →</a></p></div></div>
       <div class="grid kpis">
         ${c ? `<div class="panel kpi"><div class="label">Doppelt gesichert</div>
           <div class="value num" style="color:var(--ok)">${Math.round((secured / (c.unique_gb || 1)) * 100)} %</div>
@@ -406,7 +406,7 @@
     },
     async protokoll() {
       const r = await fetch("/api/audit"); const { rows } = await r.json();
-      const label = { regel: "Sicherungsregel", datentraeger: "Datenträger", soll_name: "Soll-Name", befund: "Befund", altprojekt: "Altprojekt", uebergabe: "Übergabe (Clemens/Paul)", antwort: "Antwort an Claude", vorschlag: "Vorschlag", upload_link: "Upload-Link" };
+      const label = { regel: "Sicherungsregel", datentraeger: "Datenträger", soll_name: "Soll-Name", befund: "Befund", altprojekt: "Altprojekt", uebergabe: "Übergabe (Clemens/Paul)", dropbox: "Dropbox-Ausstieg", antwort: "Antwort an Claude", vorschlag: "Vorschlag", upload_link: "Upload-Link" };
       return `<div class="head"><div><h1>Protokoll</h1><p>Wer hat wann was geändert. Die letzten 300 Einträge.</p></div></div>
       <div class="panel">${rows.length ? `<table class="table"><thead><tr><th>Wann</th><th>Wer</th><th>Was</th><th>Details</th></tr></thead><tbody>
         ${rows.map((r) => `<tr><td class="num">${esc(new Date(r.at).toLocaleString("de-DE"))}</td><td>${esc(r.who)}</td><td>${esc(label[r.action] || r.action)}</td>
