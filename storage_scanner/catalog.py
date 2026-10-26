@@ -19,6 +19,7 @@ import argparse
 import json
 import logging
 import os
+import unicodedata
 import plistlib
 import sqlite3
 import subprocess
@@ -78,6 +79,8 @@ _SKIP_DIRS = {
     # NAS-Papierkorb/-Metadaten und geparkte Dateien (zum Löschen vorgemerkt) zählen nie als Kopie
     "#recycle", "@eaDir", "_ZU LOESCHEN (geprüft doppelt)",
 }
+# SMB liefert Umlaute oft zerlegt (NFD); beide Schreibweisen überspringen
+_SKIP_DIRS_NFD = {unicodedata.normalize("NFD", n) for n in _SKIP_DIRS}
 # Unterordner einer NAS-Freigabe, die unter eigener Kennung erfasst werden (sonst doppelt gezählt)
 _OWN_SHARES = {"nas:NXTCLOUD/NXT STUDIOS": {"NXT STUDIOS INTERN", "UNSORTED ARCHIVE", "_SYSTEM", "_EINGANG"}}
 
@@ -234,7 +237,7 @@ def walk_files(root: Path, errors: list, skip_top: frozenset = frozenset()):
             n = e.name
             if n in _SKIP_DIRS or n.startswith("._") or n.endswith(".tmp") or n.startswith(_SKIP_PREFIXES):
                 continue
-            if d == root and n in skip_top:
+            if n in _SKIP_DIRS_NFD or (d == root and n in skip_top):
                 continue
             try:
                 if e.is_dir(follow_symlinks=False):
