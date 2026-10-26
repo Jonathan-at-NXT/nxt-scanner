@@ -87,15 +87,17 @@ export function buildDisks(disks, metaRows, projects, healthRows = []) {
 }
 
 /** Projekte je Cluster inkl. Regel, Kopien je Typ, Befunde. */
-export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0, zeroFiles = [] }) {
+export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0, zeroFiles = [], zeroMissing = null }) {
   const diskList = buildDisks(disks, diskMeta, projects, health);
   const disk = new Map(diskList.map((d) => [d.uuid, d]));
   const ruleBy = new Map(rules.map((r) => [r.rule_key, r]));
   const phys = (u) => (String(u).startsWith("nas:") ? String(u).split("/")[0] : u);
   for (const d of diskList) if (d.uuid.startsWith("nas:") && !disk.has(phys(d.uuid)))
     disk.set(phys(d.uuid), { ...d, uuid: phys(d.uuid), name: "NAS", tier: "NAS" });
+  // Für "vollständige Kopie" zählen nur leere Dateien, deren Inhalt anderswo intakt liegt, aber nicht in dieser Kopie
+  // (zeroMissing). Überall leere Clips sind verloren und machen keine Kopie schlechter als die andere.
   const zeroIn = new Map();
-  for (const z of zeroFiles) {
+  for (const z of zeroMissing ?? zeroFiles) {
     const parts = String(z.rel_path).split("/");
     const seen = new Set();
     for (let k = 0; k < Math.min(3, parts.length - 1); k++) {

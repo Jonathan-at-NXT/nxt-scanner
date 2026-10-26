@@ -86,6 +86,14 @@ function applySuggestions(projects, suggestions) {
   return out;
 }
 
+// Leere Dateien, deren Inhalt anderswo intakt liegt (gleicher Ordner + Name, keine Proxys, ohne Dropbox),
+// aber nicht auf demselben Datenträger: nur diese machen eine Kopie unvollständig.
+const ZERO_MISSING_SQL = `WITH z AS (SELECT disk_uuid, rel_path, name, rtrim(rel_path, replace(rel_path,'/','')) AS p FROM files WHERE size=0 LIMIT 50000),
+z2 AS (SELECT disk_uuid, rel_path, name, substr(rel_path, length(rtrim(substr(p,1,length(p)-1), replace(substr(p,1,length(p)-1),'/','')))+1) AS suf FROM z)
+SELECT disk_uuid, rel_path FROM z2 WHERE
+  EXISTS(SELECT 1 FROM files f WHERE f.name=z2.name AND f.size>0 AND f.disk_uuid<>'dropbox:NXT' AND f.rel_path NOT LIKE '%proxy%' AND substr(f.rel_path, -length(z2.suf))=z2.suf)
+  AND NOT EXISTS(SELECT 1 FROM files f WHERE f.name=z2.name AND f.size>0 AND f.disk_uuid=z2.disk_uuid AND f.rel_path NOT LIKE '%proxy%' AND substr(f.rel_path, -length(z2.suf))=z2.suf)`;
+
 async function loadState(env) {
   const q = (sql) => env.DB.prepare(sql).all().then((r) => r.results || []);
   const [projects, disks, diskMeta, rules, states, overrides, health] = await Promise.all([
@@ -98,20 +106,22 @@ async function loadState(env) {
   const rm = await env.DB.prepare("SELECT value FROM meta WHERE key='cleanup_reserve_months'").first();
   const reserveMonths = rm ? Number(rm.value) : DEFAULT_RESERVE_MONTHS;
   const legacy = await loadLegacy(env, projects);
-  let zeroFiles = [];
+  let zeroFiles = [], zeroMissing = null;
   try { zeroFiles = env.CATALOG ? ((await env.CATALOG.prepare("SELECT disk_uuid, rel_path FROM files WHERE size=0 LIMIT 50000").all()).results || []) : []; }
   catch { zeroFiles = []; }
+  try { zeroMissing = env.CATALOG ? ((await env.CATALOG.prepare(ZERO_MISSING_SQL).all()).results || null) : null; }
+  catch { zeroMissing = null; }
   // Nils' Nummern-Ordner (keine Projekte der Liste): Aussortieren = alle Kopien frei, Nur 1× = alle bis auf eine
   const legacyGb = legacy.filter((x) => x.source === "nummer").reduce((s, x) => s + (x.decision === "aussortieren" ? x.total_gb
     : x.decision === "einfach" ? Math.max(0, x.total_gb - x.size_gb) : 0), 0);
-  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles });
+  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles, zeroMissing });
   // Vorschläge aus dem Inhalts-Abgleich: offen und noch ohne Soll-Name
   const ovKeys = new Set(overrides.map((o) => `${o.disk_uuid}|${o.rel_path}`));
   const sugg = (await q("SELECT * FROM content_suggestion WHERE status='offen'")).filter((s) => !ovKeys.has(`${s.disk_uuid}|${s.rel_path}`));
   const dn = new Map(disks.map((d) => [d.uuid, d.name]));
   a.suggestions = sugg.map((s) => ({ ...s, disk: dn.get(s.disk_uuid) || "?" })).sort((x, y) => y.shared_gb - x.shared_gb);
   if (sugg.length) {
-    const b = analyze({ projects: applySuggestions(projects, sugg), disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles });
+    const b = analyze({ projects: applySuggestions(projects, sugg), disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles, zeroMissing });
     const lv = (r) => Object.fromEntries(["einfach", "teilweise", "ok", "mehrfach"].map((k) => [k, r.projects.filter((p) => p.level === k).length]));
     a.cleanup.with_suggestions = { count: sugg.length, balance: b.cleanup.balance, levels: lv(b), levels_now: lv(a) };
   }

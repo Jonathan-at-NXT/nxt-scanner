@@ -93,3 +93,20 @@ test("Kopie mit leeren Dateien (0 Byte) zählt nicht als vollständig", () => {
   assert.equal(a.projects[0].types[0].disks, 1);
   assert.equal(a.projects[0].types[0].copies.find((c) => c.disk_uuid === "B").zero, 1);
 });
+
+test("überall leere Clips (ohne intakte Version) machen keine Kopie unvollständig", () => {
+  const z = (d) => ({ disk_uuid: d, rel_path: "NXT STUDIOS/2025-02-13_KTM ORANGE BLOOD_FOOTAGE/DAY 2/BTS/C0001.MP4" });
+  const a = analyze({
+    disks: [disk("A", "TOWER 8"), disk("B", "TOWER 11")],
+    projects: [proj("A", "2025-02-13_KTM ORANGE BLOOD_FOOTAGE", 5000), proj("B", "2025-02-13_KTM ORANGE BLOOD_FOOTAGE", 5000)],
+    zeroFiles: [z("A"), z("B")], zeroMissing: [],
+  });
+  assert.equal(a.projects[0].types[0].disks, 2);
+  // ist der Clip nur auf B leer und auf A intakt, bleibt B unvollständig
+  const b = analyze({
+    disks: [disk("A", "TOWER 8"), disk("B", "TOWER 11")],
+    projects: [proj("A", "2025-02-13_KTM ORANGE BLOOD_FOOTAGE", 5000), proj("B", "2025-02-13_KTM ORANGE BLOOD_FOOTAGE", 5000)],
+    zeroFiles: [z("B")], zeroMissing: [z("B")],
+  });
+  assert.equal(b.projects[0].types[0].disks, 1);
+});
