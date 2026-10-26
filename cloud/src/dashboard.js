@@ -12,6 +12,8 @@
  * POST /api/handover     Entscheidung + Nachricht von Clemens/Paul zu einem ihrer Projekte
  * GET  /api/dropbox      Dropbox-Ausstieg (Ansicht #/dropbox): Ordner, die nur in der Dropbox liegen
  * POST /api/dropbox      Entscheidung + Notiz zu einem Dropbox-Ordner
+ * GET  /api/chat?after=  Chat mit dem NXT Data Agent (Antworten schreibt der Agent auf dem Sicherungs-Mac)
+ * POST /api/chat         Nachricht an den Agent
  *
  * Jede Änderung landet mit der Access-E-Mail im audit_log.
  */
@@ -272,6 +274,12 @@ async function handleWrite(path, body, env, user) {
     return { ok: true };
   }
   // Übergabe-Seite: Clemens/Paul entscheiden selbst (Aussortieren/Nur 1×/Behalten/Ansehen) und können eine Nachricht hinterlassen
+  if (path === "/api/chat") {
+    const text = clean(body.text, 4000);
+    if (!text) throw new Error("Nachricht ist leer");
+    await env.DB.prepare("INSERT INTO chat_message(at, author, role, text) VALUES(?,?,?,?)").bind(now(), who, "user", text).run();
+    return { ok: true };
+  }
   if (path === "/api/dropbox") {
     const key = String(body.key || "").slice(0, 1000);
     const cur = await env.DB.prepare("SELECT * FROM dropbox_folder WHERE path=?").bind(key).first();
@@ -502,6 +510,12 @@ export default {
       if (url.pathname === "/app.js") return respond(APP_JS, "text/javascript; charset=utf-8");
       if (url.pathname === "/handover.js") return respond(HANDOVER_JS, "text/javascript; charset=utf-8");
       if (url.pathname === "/dropbox" || url.pathname === "/dropbox/") return new Response(null, { status: 302, headers: { location: "/#/dropbox" } });
+      if (url.pathname === "/api/chat") {
+        const after = Number(url.searchParams.get("after")) || 0;
+        const rows = (await env.DB.prepare(
+          "SELECT * FROM (SELECT * FROM chat_message WHERE id > ? ORDER BY id DESC LIMIT 200) ORDER BY id").bind(after).all()).results || [];
+        return json({ rows });
+      }
       if (url.pathname === "/api/dropbox") {
         const rows = (await env.DB.prepare("SELECT * FROM dropbox_folder").all()).results || [];
         return json({ rows, choices: DROPBOX_CHOICES });
