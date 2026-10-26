@@ -287,8 +287,8 @@ def test_inventory_handles_exfat_inode_above_int64(tmp_path, monkeypatch):
     _write(vol, "P/a.mov", b"x" * 10)
     real_walk = catalog.walk_files
 
-    def walk(root, errors):
-        for rel, st in real_walk(root, errors):
+    def walk(root, errors, *a):
+        for rel, st in real_walk(root, errors, *a):
             class S:
                 pass
             s = S()

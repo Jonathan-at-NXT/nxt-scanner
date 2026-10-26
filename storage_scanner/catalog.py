@@ -75,7 +75,11 @@ _SKIP_DIRS = {
     ".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems",
     ".DocumentRevisions-V100", ".DS_Store", "$RECYCLE.BIN",
     "System Volume Information", ".PKInstallSandboxManager",
+    # NAS-Papierkorb/-Metadaten und geparkte Dateien (zum Löschen vorgemerkt) zählen nie als Kopie
+    "#recycle", "@eaDir", "_ZU LOESCHEN (geprüft doppelt)",
 }
+# Unterordner einer NAS-Freigabe, die unter eigener Kennung erfasst werden (sonst doppelt gezählt)
+_OWN_SHARES = {"nas:NXTCLOUD/NXT STUDIOS": {"NXT STUDIOS INTERN", "UNSORTED ARCHIVE", "_SYSTEM", "_EINGANG"}}
 
 _KINDS = {
     "video": {"mp4", "mov", "mxf", "mts", "m2ts", "avi", "mkv", "braw", "r3d",
@@ -206,7 +210,7 @@ def upsert_volume(conn: sqlite3.Connection, vol: dict) -> None:
 
 # ── Inventur (nur stat) ───────────────────────────────────────────
 
-def walk_files(root: Path, errors: list):
+def walk_files(root: Path, errors: list, skip_top: frozenset = frozenset()):
     """Iterativ alle regulären Dateien unter root: (rel_path, stat). Folgt keinen Symlinks."""
     root = Path(root)
     stack = [root]
@@ -229,6 +233,8 @@ def walk_files(root: Path, errors: list):
         for e in entries:
             n = e.name
             if n in _SKIP_DIRS or n.startswith("._") or n.endswith(".tmp") or n.startswith(_SKIP_PREFIXES):
+                continue
+            if d == root and n in skip_top:
                 continue
             try:
                 if e.is_dir(follow_symlinks=False):
@@ -285,7 +291,7 @@ def inventory(mount: str, conn: sqlite3.Connection, vol: dict | None = None,
                 "UPDATE file SET last_seen=? WHERE volume_uuid=? AND rel_path=?", batch_touch)
         batch_new.clear(); batch_upd.clear(); batch_touch.clear()
 
-    for rel, st in walk_files(Path(mount), errors):
+    for rel, st in walk_files(Path(mount), errors, frozenset(_OWN_SHARES.get(uuid, ()))):
         seen.add(rel)
         stats["files"] += 1
         stats["bytes"] += st.st_size
