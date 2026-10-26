@@ -10,7 +10,7 @@
  * POST /api/finding      Befund als umgesetzt/ignoriert markieren oder wieder öffnen
  * GET  /uebergabe/<person>  Übergabe-Liste (Altprojekte „An Clemens/Paul geben“), eigene Seite
  * POST /api/handover     Entscheidung + Nachricht von Clemens/Paul zu einem ihrer Projekte
- * GET  /dropbox          Dropbox-Ausstieg: je Ordner (nur in Dropbox) sichern / darf weg / ansehen
+ * GET  /api/dropbox      Dropbox-Ausstieg (Ansicht #/dropbox): Ordner, die nur in der Dropbox liegen
  * POST /api/dropbox      Entscheidung + Notiz zu einem Dropbox-Ordner
  *
  * Jede Änderung landet mit der Access-E-Mail im audit_log.
@@ -20,7 +20,7 @@ import { verifyAccess, devUser } from "./access.js";
 import { legacyProjects, oldProjects, LEGACY_DECISIONS, DEFAULT_CUTOFF, validCutoff, HANDOVER } from "./legacy.js";
 import { handoverPage, HANDOVER_CHOICES } from "./handover.js";
 import HANDOVER_JS from "../static/handover.js.txt";
-import { dropboxPage, DROPBOX_CHOICES } from "./dropbox.js";
+import { DROPBOX_CHOICES } from "./dropbox.js";
 import { analyze, SICHERUNG, TIERS, DEFAULT_RESERVE_MONTHS } from "./analysis.js";
 import { runDerive } from "./derive.js";
 import { validateFolder } from "./notion_sync.js";
@@ -97,6 +97,8 @@ SELECT disk_uuid, rel_path FROM z2 WHERE
   EXISTS(SELECT 1 FROM files f WHERE f.name=z2.name AND f.size>0 AND f.disk_uuid<>'dropbox:NXT' AND f.rel_path NOT LIKE '%proxy%' AND substr(f.rel_path, -length(z2.suf))=z2.suf)
   AND NOT EXISTS(SELECT 1 FROM files f WHERE f.name=z2.name AND f.size>0 AND f.disk_uuid=z2.disk_uuid AND f.rel_path NOT LIKE '%proxy%' AND substr(f.rel_path, -length(z2.suf))=z2.suf)`;
 
+let zeroCache = null;
+
 async function loadState(env) {
   const q = (sql) => env.DB.prepare(sql).all().then((r) => r.results || []);
   const [projects, disks, diskMeta, rules, states, overrides, health] = await Promise.all([
@@ -112,8 +114,13 @@ async function loadState(env) {
   let zeroFiles = [], zeroMissing = null;
   try { zeroFiles = env.CATALOG ? ((await env.CATALOG.prepare("SELECT disk_uuid, rel_path FROM files WHERE size=0 LIMIT 50000").all()).results || []) : []; }
   catch { zeroFiles = []; }
-  try { zeroMissing = env.CATALOG ? ((await env.CATALOG.prepare(ZERO_MISSING_SQL).all()).results || null) : null; }
-  catch { zeroMissing = null; }
+  // teure Abfrage (~2–3 s): je Worker-Instanz 10 min zwischenspeichern
+  if (zeroCache && Date.now() - zeroCache.at < 600000) zeroMissing = zeroCache.rows;
+  else {
+    try { zeroMissing = env.CATALOG ? ((await env.CATALOG.prepare(ZERO_MISSING_SQL).all()).results || null) : null; }
+    catch { zeroMissing = null; }
+    if (zeroMissing) zeroCache = { at: Date.now(), rows: zeroMissing };
+  }
   // Nils' Nummern-Ordner (keine Projekte der Liste): Aussortieren = alle Kopien frei, Nur 1× = alle bis auf eine
   const legacyGb = legacy.filter((x) => x.source === "nummer").reduce((s, x) => s + (x.decision === "aussortieren" ? x.total_gb
     : x.decision === "einfach" ? Math.max(0, x.total_gb - x.size_gb) : 0), 0);
@@ -494,9 +501,10 @@ export default {
       if (url.pathname === "/app.css") return respond(APP_CSS, "text/css; charset=utf-8");
       if (url.pathname === "/app.js") return respond(APP_JS, "text/javascript; charset=utf-8");
       if (url.pathname === "/handover.js") return respond(HANDOVER_JS, "text/javascript; charset=utf-8");
-      if (url.pathname === "/dropbox" || url.pathname === "/dropbox/") {
+      if (url.pathname === "/dropbox" || url.pathname === "/dropbox/") return new Response(null, { status: 302, headers: { location: "/#/dropbox" } });
+      if (url.pathname === "/api/dropbox") {
         const rows = (await env.DB.prepare("SELECT * FROM dropbox_folder").all()).results || [];
-        return respond(dropboxPage(rows, { me: user.email }), "text/html; charset=utf-8");
+        return json({ rows, choices: DROPBOX_CHOICES });
       }
       if (url.pathname === "/outfit.woff2") return respond(FONT, "font/woff2", 200, { "cache-control": "public, max-age=604800" });
       if (url.pathname === "/api/state") return json({ me: user.email, ...(await loadState(env)) });

@@ -55,18 +55,7 @@ test("Altprojekte bis zum gewählten Stichmonat", () => {
   assert.equal(validCutoff("x' OR 1"), null);
 });
 
-test("Dropbox-Seite: Ordner nach Bereich, Summen und Auswahl", async () => {
-  const { dropboxPage, dropboxSummary, section } = await import("../src/dropbox.js");
-  const rows = [
-    { path: "NXT STUDIOS/CLIENTS/EINFACHBANK", gb: 2117, files: 431, suggestion: "sichern", choice: "sichern" },
-    { path: "NXT STUDIOS (accounts)/Projekte/X", gb: 100, files: 3, suggestion: "accounts", choice: null },
-    { path: "NXT STUDIOS/QUICK UPLOADS/FLINN PROXIES", gb: 38, files: 195, suggestion: "weg", choice: "loeschen" },
-  ];
-  assert.equal(section(rows[0].path), "NXT STUDIOS / CLIENTS");
-  const s = dropboxSummary(rows);
-  assert.equal(s.sichern, 2117); assert.equal(s.loeschen, 38); assert.equal(s.offen_n, 1);
-  const html = dropboxPage(rows, { me: "j@nxtstudios.de" });
-  assert.match(html, /EINFACHBANK/);
-  assert.match(html, /window\.HO_API = "\/api\/dropbox"/);
-  assert.match(html, /data-ho-choice="" title="Auswahl zurücknehmen">Sichern/);
+test("Dropbox-Auswahl: drei Möglichkeiten", async () => {
+  const { DROPBOX_CHOICES } = await import("../src/dropbox.js");
+  assert.deepEqual(Object.keys(DROPBOX_CHOICES), ["sichern", "loeschen", "ansehen"]);
 });

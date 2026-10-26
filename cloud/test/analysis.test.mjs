@@ -110,3 +110,9 @@ test("überall leere Clips (ohne intakte Version) machen keine Kopie unvollstän
   });
   assert.equal(b.projects[0].types[0].disks, 1);
 });
+
+test("unplausible Kapazität (kleiner als die Dateien) wird ignoriert", () => {
+  const a = analyze({ disks: [{ uuid: "nas:X/Y", name: "NXT STUDIOS", used_bytes: 62e12, fs_used_bytes: 1.7e12, capacity_bytes: 3.6e12, last_scan: "2026-10-26" }], projects: [] });
+  assert.equal(a.disks[0].used_gb, 62000);
+  assert.equal(a.disks[0].capacity_gb, null);
+});

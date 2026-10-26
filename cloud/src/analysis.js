@@ -61,7 +61,8 @@ export function buildDisks(disks, metaRows, projects, healthRows = []) {
     const retired = isRetired(d);
     const stale = retired || (dup && newest.get(d.name)?.uuid !== d.uuid && !m.separate_disk);
     const tier = m.tier || guessTier(d.name);
-    const cap = d.capacity_bytes || null;
+    // Kapazität kleiner als die gezählten Dateien = Überlauf/SMB-Fehlwert (z. B. NAS 3,6 statt 87 TB) → unbekannt
+    const cap = d.capacity_bytes && !(d.used_bytes > d.capacity_bytes) ? d.capacity_bytes : null;
     // Plausibilität: statvfs läuft auf macOS bei > 16 TiB über (negative/zu große Werte) → dann used_bytes
     const ok = (v) => v != null && v >= 0 && (!cap || v <= cap);
     // Beide plausibel → der größere (freien Platz nie überschätzen; Überlauf kann auch klein aussehen)
