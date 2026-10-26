@@ -388,6 +388,8 @@
       const vis = (n) => { const v = n.kids.map(vis).some(Boolean) || hit(n); show.set(n.path, v); return v; };
       roots.forEach(vis);
       const SUG = { sichern: "Vorschlag: sichern", accounts: "accounts, niedrige Priorität", weg: "Vorschlag: darf weg (Proxys)" };
+      // Pfade sind relativ zur Team-Wurzel (path_display) → Dropbox-Weboberfläche an genau dieser Stelle
+      const dbxUrl = (p) => "https://www.dropbox.com/home/" + p.split("/").filter((x) => x !== "(oberste Ebene)").map(encodeURIComponent).join("/");
       const row = (n, lvl) => {
         if (!show.get(n.path)) return "";
         const kids = n.kids.filter((k) => show.get(k.path));
@@ -395,7 +397,7 @@
         const inherited = !n.choice && n.eff;
         return `<tr><td><div class="row" style="gap:6px;padding-left:${lvl * 18}px;align-items:flex-start">
             ${kids.length ? `<button class="btn small ghost" data-dbx-toggle="${esc(n.path)}" style="min-width:28px" title="${isOpen ? "Zuklappen" : "Aufklappen"}">${isOpen ? "▾" : "▸"}</button>` : `<span style="display:inline-block;min-width:28px"></span>`}
-            <div><b>${esc(n.path.split("/").pop())}</b>
+            <div><a href="${dbxUrl(n.path)}" target="_blank" rel="noopener" title="In Dropbox öffnen (neuer Tab)" style="color:inherit"><b>${esc(n.path.split("/").pop())}</b> <span class="faint">↗</span></a>
             <div class="sub">${esc(SUG[n.suggestion] || "")} · ${fmtN(n.files)} Dateien${kids.length ? ` · ${kids.length} Unterordner` : ""}${n.message ? ` · „${esc(n.message)}“` : ""}</div>
             ${n.updated_by && n.choice ? `<div class="sub faint">${esc(choices[n.choice])} · ${esc(n.updated_by)} · ${esc(rel(n.updated_at))}</div>` : ""}
             ${inherited ? `<div class="sub faint">übernommen vom Überordner: ${esc(choices[n.eff])}</div>` : ""}</div></div></td>
@@ -420,6 +422,7 @@
       ${visRoots.length ? visRoots.map((r) => {
         const isClosed = closed.has(r.path) && !q;
         return `<div class="panel section"><h3 data-dbx-sec="${esc(r.path)}" style="cursor:pointer" title="${isClosed ? "Aufklappen" : "Zuklappen"}">${isClosed ? "▸" : "▾"} ${esc(r.path.replace("/", " / "))}
+          <a href="${dbxUrl(r.path)}" target="_blank" rel="noopener" title="In Dropbox öffnen (neuer Tab)" class="faint" style="text-transform:none">↗ Dropbox</a>
           <span class="faint" style="text-transform:none;letter-spacing:0">· ${r.kids.length} Ordner · ${fmtGb(r.gb)}</span></h3>
           ${r.kids.length ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin:-4px 0 10px"><span class="sub">Ganzer Bereich:</span>${Object.entries(choices).map(([k, v]) => `<button class="btn small ${r.choice === k ? "" : "ghost"}" data-dbx-key="${esc(r.path)}" data-dbx-choice="${r.choice === k ? "" : k}">${r.choice === k ? "✓ " : ""}${esc(v)}</button>`).join("")}</div>` : ""}
           ${isClosed ? "" : `<table class="table"><thead><tr><th>Ordner</th><th class="r">Größe</th><th>Entscheidung</th></tr></thead><tbody>
@@ -567,6 +570,7 @@
   });
 
   document.addEventListener("click", async (e) => {
+    if (e.target.closest("a[href^='https://www.dropbox.com/']")) return;   // Dropbox-Link: normal im neuen Tab öffnen
     const t = e.target.closest("[data-dbx-f],[data-dbx-key],[data-dbx-note],[data-dbx-toggle],[data-dbx-sec],[data-dbx-all]");
     if (!t) return;
     e.preventDefault();
