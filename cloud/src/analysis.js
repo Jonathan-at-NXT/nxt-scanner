@@ -415,9 +415,9 @@ export const PHASE1_SINCE = "2026-10-22T00:00:00+02:00";
 const MARGIN = 0.05;                 // Ziele nie über 95 % füllen
 const SMALL_TB = 6;                  // Platten bis zu dieser Größe kommen in den Runden zuletzt
 const PORTS = 3;                     // Anschlüsse; ein Gehäuse mit mehreren Platten belegt nur einen
-// Neupreis je TB Kapazität (Stand 10/2026, grob): externe HDD ~20 €, T7-Shield-Klasse ~90 €,
-// NAS inkl. Gehäuse und Paritätsplatte ~60 € je nutzbarem TB. Für „Wert“ und „Kosten je GB“ in der Übersicht.
-export const PRICE_EUR_PER_TB = { HDD: 20, SSD: 90, NAS: 60 };
+// Neupreis je TB Kapazität (Stand 27.10.2026): externe 24-TB-HDD 500–700 € (~25 €/TB), T7 Shield 2 TB ~180 $ / 4 TB
+// 680–930 $ (~110 €/TB gemittelt), NAS: IronWolf Pro 24 TB ~1.080 € + Paritätsplatte + Gehäuse (~65 € je nutzbarem TB).
+export const PRICE_EUR_PER_TB = { HDD: 25, SSD: 110, NAS: 65 };
 // Nutzbare NAS-Kapazität (df auf der Freigabe: 87 TiB); über SMB kommt pro Freigabe keine verlässliche Zahl an
 export const NAS_CAP_TB = 95.7;
 export const DEFAULT_RESERVE_MONTHS = 3;   // Platz für neue Drehs, die in dieser Zeit dazukommen (einstellbar)
