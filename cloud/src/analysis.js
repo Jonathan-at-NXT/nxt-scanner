@@ -359,6 +359,17 @@ function overview(projects, disks, findings) {
   }
   const tierGb = {};
   for (const d of realDisks) { const t = d.tier || "unbekannt"; tierGb[t] = (tierGb[t] || 0) + (d.used_gb || 0); }
+  // je Stufe: Anzahl, belegt, Kapazität/frei (nur Platten mit bekannter Kapazität; veraltete Doubletten zählen nicht)
+  const tb = (g) => Math.round(g / 10) / 100;
+  // NAS-Freigaben (nas:NXTCLOUD/<Freigabe>) sind ein Gerät
+  const tierStats = {}, seen = new Set();
+  for (const d of realDisks.filter((x) => !x.stale)) {
+    const t = d.tier || "unbekannt", dev = d.uuid.startsWith("nas:") ? d.uuid.split("/")[0] : d.uuid;
+    const s = (tierStats[t] ||= { disks: 0, used_gb: 0, cap_gb: 0, free_gb: 0, cap_known: 0 });
+    if (!seen.has(dev)) { seen.add(dev); s.disks++; }
+    s.used_gb += d.used_gb || 0;
+    if (d.capacity_gb) { s.cap_known++; s.cap_gb += d.capacity_gb; s.free_gb += d.free_gb || 0; }
+  }
   const unsecured = projects.filter((p) => p.missing_gb > 0);
   return {
     disks: realDisks.length,
@@ -374,6 +385,8 @@ function overview(projects, disks, findings) {
     disks_checked: realDisks.filter((d) => d.health).length,
     unsecured_partial: projects.filter((p) => p.level === "teilweise").length,
     savings_tb: Math.round(open.filter((f) => ["EXCESS_COPIES", "PARTIAL_COPY", "REF_EXTRA"].includes(f.type)).reduce((s, f) => s + (f.savings_gb || 0), 0) / 10) / 100,
+    tier_stats: Object.fromEntries(Object.entries(tierStats).map(([k, s]) => [k, { disks: s.disks, used_tb: tb(s.used_gb),
+      cap_tb: tb(s.cap_gb), free_tb: tb(s.free_gb), cap_known: s.cap_known }])),
     findings: byPrio, tier_tb: Object.fromEntries(Object.entries(tierGb).map(([k, v]) => [k, Math.round(v / 10) / 100])),
     next: unsecured.sort((a, b) => b.missing_gb - a.missing_gb).slice(0, 8)
       .map((p) => ({ id: p.id, name: `${p.date} ${p.name}`, size_gb: p.size_gb, missing_gb: p.missing_gb, level: p.level,

@@ -189,8 +189,10 @@
       const o = S.overview;
       const tot = Object.values(o.copies).reduce((a, b) => a + b, 0) || 1;
       const seg = (k, cls) => `<span class="${cls}" style="width:${(o.copies[k] / tot) * 100}%"></span>`;
-      const tiers = Object.entries(o.tier_tb).sort((a, b) => b[1] - a[1]);
-      const tierMax = Math.max(1, ...tiers.map((t) => t[1]));
+      const ts = o.tier_stats || {};
+      const tiers = Object.entries(ts).sort((a, b) => b[1].used_tb - a[1].used_tb);
+      const tierMax = Math.max(1, ...tiers.map((t) => t[1].used_tb));
+      const sum = (k) => tiers.reduce((a, [, x]) => a + (x[k] || 0), 0);
       const c = S.content, bal = S.cleanup && S.cleanup.balance;
       const secured = c ? c.two_gb + c.three_gb : 0;
       return `
@@ -206,21 +208,31 @@
         <a class="panel kpi" href="#/datentraeger" style="text-decoration:none"><div class="label">Datenträger</div><div class="value num">${fmtN(o.disks)}</div>
           <div class="sub">${fmtTb(o.used_tb)} belegt${o.disks_defect ? ` · <span style="color:var(--crit)">${o.disks_defect} defekt</span>` : ""}${o.disks_warn ? ` · ${o.disks_warn} auffällig` : ""}</div></a>
       </div>
+      <div class="panel section"><h3>In Zahlen</h3>
+        <div class="grid kpis" style="margin-bottom:14px">
+          ${c ? `<div class="kpi"><div class="label">Einmaliges Material</div><div class="value num">${fmtGb(c.unique_gb)}</div><div class="sub">jede Datei nur einmal gezählt</div></div>
+          <div class="kpi"><div class="label">Davon mind. 2× gesichert</div><div class="value num" style="color:var(--ok)">${fmtGb(secured)}</div><div class="sub">${fmtGb(c.two_gb)} genau 2× · ${fmtGb(c.three_gb)} 3× oder öfter</div></div>` : ""}
+          <div class="kpi"><div class="label">Belegt insgesamt</div><div class="value num">${fmtTb(sum("used_tb"))}</div><div class="sub">auf ${fmtN(sum("disks"))} Datenträgern, inkl. aller Kopien</div></div>
+          <div class="kpi"><div class="label">Frei</div><div class="value num">${fmtTb(sum("free_tb"))}</div><div class="sub">von ${fmtTb(sum("cap_tb"))} Kapazität (wo bekannt)</div></div>
+        </div>
+        <table class="table"><thead><tr><th>Speicherstufe</th><th class="r">Datenträger</th><th class="r">belegt</th><th class="r">Kapazität</th><th class="r">frei</th><th style="width:30%"></th></tr></thead><tbody>
+          ${tiers.map(([t, x]) => `<tr><td>${tierBadge(t === "unbekannt" ? null : t)} <span class="muted">${t === "unbekannt" ? "ohne Stufe" : ""}</span></td>
+            <td class="r num">${fmtN(x.disks)}</td><td class="r num">${fmtTb(x.used_tb)}</td>
+            <td class="r num">${x.cap_known ? fmtTb(x.cap_tb) + (x.cap_known < x.disks ? ` <span class="sub">(${x.cap_known} von ${x.disks})</span>` : "") : "–"}</td>
+            <td class="r num">${x.cap_known ? fmtTb(x.free_tb) : "–"}</td>
+            <td><div class="fill" style="width:100%"><span style="width:${(x.used_tb / tierMax) * 100}%"></span></div></td></tr>`).join("")}
+        </tbody></table>
+        <p class="hint">„Belegt“ zählt jede Kopie mit, „einmaliges Material“ jede Datei nur einmal (Datei-Abgleich, Dateien ab ${c ? c.min_file_mb : 50} MB, ${c ? fmtN(c.catalog_disks) : "–"} Datenträger im Katalog).</p>
+      </div>
       ${c ? `<div class="panel section"><div class="stack" style="height:14px;margin-bottom:8px"><span class="c0" style="width:${(c.only1_gb / (c.unique_gb || 1)) * 100}%"></span><span class="c2" style="width:${(c.two_gb / (c.unique_gb || 1)) * 100}%"></span><span class="c3" style="width:${(c.three_gb / (c.unique_gb || 1)) * 100}%"></span></div>
         <div class="legend"><span><i class="c0"></i>nur 1× · ${fmtGb(c.only1_gb)}</span><span><i class="c2"></i>genau 2× · ${fmtGb(c.two_gb)}</span><span><i class="c3"></i>3× oder öfter · ${fmtGb(c.three_gb)}</span></div></div>` : ""}
-      <div class="grid two section">
+      <div class="section">
         <div class="panel"><h3>Als Nächstes sichern</h3>
           ${o.next.length ? `<table class="table"><tbody>${o.next.map((p) => `
             <tr class="click" data-proj="${esc(p.id)}"><td><div class="name">${esc(p.name)}</div>
               <div class="sub">${p.level === "teilweise" ? "fehlt: " + esc(p.missing_types.join(", ")) + " · " : ""}${esc(p.disks.join(", "))}</div></td>
             <td class="r num">${fmtGb(p.missing_gb)}</td><td class="r"><span class="tc ${p.level === "teilweise" ? "c-1" : "c-0"}"><b>${p.level === "teilweise" ? "teilweise" : "nur 1×"}</b></span></td></tr>`).join("")}
             </tbody></table>` : `<div class="empty">Alles nach Regel gesichert.</div>`}
-        </div>
-        <div class="panel"><h3>Belegung nach Speicherstufe</h3>
-          ${tiers.map(([t, tb]) => `<div style="margin-bottom:12px"><div class="row" style="justify-content:space-between">
-            <span>${tierBadge(t === "unbekannt" ? null : t)} <span class="muted">${t === "unbekannt" ? "ohne Stufe" : ""}</span></span>
-            <span class="num">${fmtTb(tb)}</span></div>
-            <div class="fill" style="width:100%;margin-top:6px"><span style="width:${(tb / tierMax) * 100}%"></span></div></div>`).join("")}
         </div>
       </div>
       <details class="panel section"><summary style="cursor:pointer"><b>Details und Erklärungen</b></summary>
