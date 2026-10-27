@@ -7,6 +7,7 @@
  *
  * POST /notion-sync — Bearer-Auth. Notion-Spiegel aus D1 anstoßen
  *   (?dry=1 = nur planen, nichts schreiben; ?disk=<uuid|name> = nur diese Platte).
+ * POST /slack/events, POST /ingest/chat-reply — Chat mit dem NXT Data Agent über Slack (src/slack.js).
  * Cron (wrangler.toml) — alle 15 min Notion-Sync für Platten mit neuem Scan.
  *
  * Secrets kommen ausschliesslich aus env (wrangler secret put INGEST_TOKEN) —
@@ -16,6 +17,7 @@
 import { runNotionSync } from "./notion_sync.js";
 import { deriveIfChanged } from "./derive.js";
 import { handleBriefkasten } from "./briefkasten.js";
+import { handleSlack } from "./slack.js";
 
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), {
@@ -253,6 +255,11 @@ export default {
       } catch (e) {
         return json({ error: "Fehler im Briefkasten", detail: String(e).slice(0, 300) }, 500);
       }
+    }
+
+    if (url.pathname === "/slack/events" || url.pathname === "/ingest/chat-reply") {
+      const r = await handleSlack(request, env, ctx, url, authorized);
+      if (r) return r;
     }
 
     if (url.pathname === "/notion-sync" && request.method === "POST") {
