@@ -214,6 +214,7 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); }
 
 /* ── Laufende Arbeiten ─────────────────────────── */
 .jobs { max-width: 1320px; margin: 14px auto 0; padding: 0 20px; display: grid; gap: 8px; }
+[hidden] { display: none !important; }   /* sonst schlägt display:grid/flex das hidden-Attribut */
 .job { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
 .job .top { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; justify-content: space-between; font-size: 13.5px; }
 .job .bar { height: 8px; background: var(--panel-3); border-radius: 4px; overflow: hidden; margin-top: 8px; }
