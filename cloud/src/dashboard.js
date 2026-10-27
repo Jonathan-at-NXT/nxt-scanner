@@ -12,7 +12,7 @@
  * POST /api/handover     Entscheidung + Nachricht von Clemens/Paul zu einem ihrer Projekte
  * GET  /api/dropbox      Dropbox-Ausstieg (Ansicht #/dropbox): Ordner, die nur in der Dropbox liegen
  * POST /api/dropbox      Entscheidung + Notiz zu einem Dropbox-Ordner
- * GET  /api/chat?after=  Chat mit dem NXT Data Agent (Antworten schreibt der Agent auf dem Sicherungs-Mac)
+ * GET  /api/chat?after=  Chat mit dem NXT Data Agent (nur der eigene Verlauf, nach Login-E-Mail) (Antworten schreibt der Agent auf dem Sicherungs-Mac)
  * POST /api/chat         Nachricht an den Agent
  *
  * Jede Änderung landet mit der Access-E-Mail im audit_log.
@@ -277,7 +277,8 @@ async function handleWrite(path, body, env, user) {
   if (path === "/api/chat") {
     const text = clean(body.text, 4000);
     if (!text) throw new Error("Nachricht ist leer");
-    await env.DB.prepare("INSERT INTO chat_message(at, author, role, text) VALUES(?,?,?,?)").bind(now(), who, "user", text).run();
+    await env.DB.prepare("INSERT INTO chat_message(at, author, role, text, thread) VALUES(?,?,?,?,?)")
+      .bind(now(), who, "user", text, String(who).toLowerCase()).run();
     return { ok: true };
   }
   if (path === "/api/dropbox") {
@@ -513,7 +514,8 @@ export default {
       if (url.pathname === "/api/chat") {
         const after = Number(url.searchParams.get("after")) || 0;
         const rows = (await env.DB.prepare(
-          "SELECT * FROM (SELECT * FROM chat_message WHERE id > ? ORDER BY id DESC LIMIT 200) ORDER BY id").bind(after).all()).results || [];
+          "SELECT * FROM (SELECT * FROM chat_message WHERE thread = ? AND id > ? ORDER BY id DESC LIMIT 200) ORDER BY id")
+          .bind(String(user.email).toLowerCase(), after).all()).results || [];
         return json({ rows });
       }
       if (url.pathname === "/api/dropbox") {

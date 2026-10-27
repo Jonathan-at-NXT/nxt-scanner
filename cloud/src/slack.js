@@ -3,8 +3,8 @@
  *
  * POST /slack/events      — Slack Events API (Signatur mit Secret SLACK_SIGNING_SECRET geprüft).
  *   Direktnachrichten an den Bot und @-Erwähnungen landen als role=user in chat_message.
- * POST /ingest/chat-reply — Bearer INGEST_TOKEN, Body {text}. Antwort des Agenten: in chat_message und,
- *   wenn die letzte Nachricht aus Slack kam, als Bot (Secret SLACK_BOT_TOKEN) in denselben Slack-Chat.
+ * POST /ingest/chat-reply — Bearer INGEST_TOKEN, Body {text, reply_to?}. Antwort des Agenten in den Verlauf (thread)
+ *   der beantworteten Nachricht (Default: die neueste) und, wenn die aus Slack kam, als Bot (SLACK_BOT_TOKEN) dorthin.
  *
  * Secrets nur über `wrangler secret put` bzw. das Cloudflare-Dashboard, nie im Repo.
  */
@@ -77,12 +77,16 @@ async function events(request, env, ctx) {
   if (!m) return json({ ok: true });
   // Slack wiederholt Events bei langsamer Antwort: event_id ist eindeutig, doppelte werden ignoriert.
   const res = await env.DB.prepare(
-    `INSERT OR IGNORE INTO chat_message(at, author, role, text, slack_event, slack_channel, slack_ts)
-     VALUES(?,?,?,?,?,?,?)`).bind(now(), `slack:${m.user}`, "user", m.text, p.event_id || m.ts, m.channel, m.thread || m.ts).run();
+    `INSERT OR IGNORE INTO chat_message(at, author, role, text, slack_event, slack_channel, slack_ts, thread)
+     VALUES(?,?,?,?,?,?,?,?)`).bind(now(), `slack:${m.user}`, "user", m.text, p.event_id || m.ts, m.channel, m.thread || m.ts,
+    `slack:${m.user}`).run();
   if (res.meta?.changes && env.SLACK_BOT_TOKEN) {
     ctx.waitUntil((async () => {
       const name = await slackName(env, m.user);
-      await env.DB.prepare("UPDATE chat_message SET author=? WHERE slack_event=?").bind(`${name} (Slack)`, p.event_id || m.ts).run();
+      // Mit E-Mail im Slack-Profil landet die Nachricht im selben Verlauf wie im Dashboard
+      const thread = name.includes("@") ? name.toLowerCase() : `slack:${m.user}`;
+      await env.DB.prepare("UPDATE chat_message SET author=?, thread=? WHERE slack_event=?")
+        .bind(`${name} (Slack)`, thread, p.event_id || m.ts).run();
     })());
   }
   return json({ ok: true });
@@ -93,16 +97,18 @@ async function reply(request, env) {
   try { p = await request.json(); } catch { return json({ error: "invalid json" }, 400); }
   const text = String(p?.text || "").trim();
   if (!text) return json({ error: "missing text" }, 400);
-  await env.DB.prepare("INSERT INTO chat_message(at, author, role, text) VALUES(?,?,?,?)")
-    .bind(now(), "NXT Data Agent", "agent", text.slice(0, 8000)).run();
-  const lastUser = await env.DB.prepare(
-    "SELECT slack_channel, slack_ts FROM chat_message WHERE role='user' ORDER BY id DESC LIMIT 1").first();
+  const to = p.reply_to
+    ? await env.DB.prepare("SELECT id, thread, slack_channel FROM chat_message WHERE id=? AND role='user'").bind(Number(p.reply_to)).first()
+    : await env.DB.prepare("SELECT id, thread, slack_channel FROM chat_message WHERE role='user' ORDER BY id DESC LIMIT 1").first();
+  if (!to) return json({ error: "Nachricht unbekannt" }, 404);
+  await env.DB.prepare("INSERT INTO chat_message(at, author, role, text, thread) VALUES(?,?,?,?,?)")
+    .bind(now(), "NXT Data Agent", "agent", text.slice(0, 8000), to.thread).run();
   let slack = null;
-  if (lastUser?.slack_channel && env.SLACK_BOT_TOKEN) {
-    const r = await slackApi(env, "chat.postMessage", { channel: lastUser.slack_channel, text });
+  if (to.slack_channel && env.SLACK_BOT_TOKEN) {
+    const r = await slackApi(env, "chat.postMessage", { channel: to.slack_channel, text });
     slack = r.ok ? "gesendet" : `Fehler: ${r.error}`;
   }
-  return json({ ok: true, slack });
+  return json({ ok: true, reply_to: to.id, thread: to.thread, slack });
 }
 
 export async function handleSlack(request, env, ctx, url, authorized) {
