@@ -1,6 +1,6 @@
 # Erst beim Cutover deployen, auf dem ALTEN Account (ersetzt dort nxt-scanner-ingest):
 #   CLOUDFLARE_ACCOUNT_ID=46b4ead777c6a2df24459b42e738f28f npx wrangler deploy -c wrangler.proxy.toml
-# Vorher TARGET auf die neue Ingest-URL setzen. Bewusst ohne [triggers]: der Cron läuft nur noch beim neuen Worker.
+# Cron explizit leer: läuft nur noch beim neuen Worker.
 name = "nxt-scanner-ingest"
 main = "src/proxy.js"
 compatibility_date = "2026-07-24"
@@ -8,3 +8,6 @@ account_id = "46b4ead777c6a2df24459b42e738f28f"
 
 [vars]
 TARGET = "https://nxt-scanner-ingest.nxt-studios.workers.dev"
+
+[triggers]
+crons = []

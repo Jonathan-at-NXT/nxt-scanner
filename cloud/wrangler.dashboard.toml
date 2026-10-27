@@ -1,22 +1,25 @@
+# Account seit Umzug 27.10.2026: 7166b140 (nxt-studios). Alter Stand: wrangler.dashboard.alt.toml
 # NXT Speicher-Dashboard. Eigener Worker, damit Cloudflare Access nur ihn schützt
 # (die Scanner laden weiter ohne Login über nxt-scanner-ingest hoch).
 name = "nxt-storage"
 main = "src/dashboard.js"
 compatibility_date = "2026-07-24"
-account_id = "46b4ead777c6a2df24459b42e738f28f"
+account_id = "7166b140336f03b2cc698de4b49e128e"
 workers_dev = true
 
 [vars]
+PUBLIC_INGEST_URL = "https://nxt-scanner-ingest.nxt-studios.workers.dev"
+DASHBOARD_URL = "https://nxt-storage.nxt-studios.workers.dev"
 # Cloudflare Access (Zero Trust): Team-Domain und Application-AUD nach der Einrichtung eintragen.
 # Leer = Dashboard bleibt komplett gesperrt.
-ACCESS_TEAM_DOMAIN = "royal-cell-6005.cloudflareaccess.com"
-ACCESS_AUD = "402fd8f959b5bda1ce69af0ceedb67228f9f848788fa8d85bbe340e05192f3a6"
+ACCESS_TEAM_DOMAIN = "curly-king-500f.cloudflareaccess.com"
+ACCESS_AUD = "7387272346f8edae800b01e71a18a856db9b5f8974d4271795d1f9c9f0f5ca5d"
 ALLOWED_EMAIL_DOMAINS = "nxtstudios.de"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "nxt-scanner"
-database_id = "82c8542a-1a97-481d-a0dd-1b8c4af9d4bd"
+database_id = "187ea766-ee3c-4b0e-8d59-133ae1b1533f"
 
 [[rules]]
 type = "Text"
@@ -32,4 +35,4 @@ fallthrough = true
 [[d1_databases]]
 binding = "CATALOG"
 database_name = "nxt-catalog"
-database_id = "920f10f1-c565-40dc-99b9-f02ce56f00d7"
+database_id = "b87661a6-6eaf-43db-96c2-390775e68386"
