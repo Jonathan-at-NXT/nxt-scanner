@@ -23,6 +23,7 @@ try:  # Admin-Teile (Karten-Ingest) fehlen im Team-Build
 except ImportError:
     store = orchestrator = device_monitor = camera_map = d1_projects = None
     ADMIN_AVAILABLE = False
+from .paths import DEFAULT_D1_INGEST_URL, migrate_ingest_url
 from .paths import (
     CONFIG_PATH, LOG_PATH, LAST_SCAN_PATH, REPORTS_DIR,
     ensure_dirs, migrate_legacy_data, get_resource_path,
@@ -32,7 +33,6 @@ from .updater import check_for_update, install_update
 RESCAN_INTERVAL_SECONDS = 3600  # 1 Stunde
 
 # Nicht geheim (nur die URL) — der Token wird manuell eingetragen, nie im Repo/Build.
-DEFAULT_D1_INGEST_URL = "https://nxt-scanner-ingest.nxtstudios.workers.dev"
 
 IGNORED_VOLUMES = {"Macintosh HD", "Macintosh HD - Data", "Recovery", "Preboot", "VM", "Update"}
 
@@ -51,7 +51,10 @@ def load_config() -> dict:
     if CONFIG_PATH.exists():
         try:
             with open(CONFIG_PATH) as f:
-                return json.load(f)
+                config = json.load(f)
+            if migrate_ingest_url(config):
+                save_config(config)
+            return config
         except (json.JSONDecodeError, OSError):
             pass
     return {}

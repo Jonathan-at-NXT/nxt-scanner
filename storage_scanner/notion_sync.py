@@ -14,7 +14,7 @@ from pathlib import Path
 import httpx
 
 from .utils import bytes_to_gb
-from .paths import CONFIG_PATH
+from .paths import CONFIG_PATH, migrate_ingest_url
 
 API = "https://api.notion.com/v1"
 
@@ -64,7 +64,10 @@ def api_get(endpoint: str) -> dict:
 def load_config() -> dict:
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH) as f:
-            return json.load(f)
+            config = json.load(f)
+        if migrate_ingest_url(config):
+            save_config(config)
+        return config
     return {}
 
 

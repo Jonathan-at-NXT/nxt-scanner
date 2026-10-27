@@ -359,7 +359,7 @@ async function handleWrite(path, body, env, user) {
     await env.DB.prepare("INSERT INTO upload_link(token, name, created_by, created_at, expires_at, max_bytes, note, active) VALUES(?,?,?,?,?,?,?,1)")
       .bind(token, name, who, now(), exp, maxGb ? Math.round(maxGb * 1e9) : null, clean(body.note, 300)).run();
     await audit(env, who, "upload_link", name, { gueltig_tage: days, max_gb: maxGb });
-    return { ok: true, token };
+    return { ok: true, token, link: `${env.PUBLIC_INGEST_URL || "https://nxt-scanner-ingest.nxtstudios.workers.dev"}/u/${token}` };
   }
   if (path === "/api/briefkasten/deactivate") {
     const token = clean(body.token, 80);
@@ -552,7 +552,7 @@ export default {
           GROUP BY l.token ORDER BY l.created_at DESC LIMIT 200`).all()).results || [];
         const files = (await env.DB.prepare(`SELECT f.id, f.token, f.rel_path, f.size, f.state, f.created_at, f.uploaded_at, f.pulled_at, f.nas_path, f.error
           FROM upload_file f ORDER BY f.id DESC LIMIT 300`).all()).results || [];
-        return json({ links, files, base: "https://nxt-scanner-ingest.nxtstudios.workers.dev/u/" });
+        return json({ links, files, base: `${env.PUBLIC_INGEST_URL || "https://nxt-scanner-ingest.nxtstudios.workers.dev"}/u/` });
       }
       if (url.pathname === "/api/zero") {
         // Leere Dateien eines Datenträgers + heile Versionen (gleicher Name, Größe > 0, gleiche letzte Ordnerebene)

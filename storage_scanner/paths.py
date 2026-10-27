@@ -77,3 +77,18 @@ def migrate_legacy_data() -> None:
             shutil.copy2(report, dest)
 
     marker.touch()
+
+
+# Zentrale Ingest-URL. Beim Cloudflare-Account-Umzug: hier die neue URL eintragen und die alte in
+# OLD_D1_INGEST_URLS aufnehmen; gespeicherte Configs mit einer alten URL werden beim Laden umgeschrieben.
+DEFAULT_D1_INGEST_URL = "https://nxt-scanner-ingest.nxtstudios.workers.dev"
+OLD_D1_INGEST_URLS: tuple[str, ...] = ()
+
+
+def migrate_ingest_url(config: dict) -> bool:
+    """Ersetzt eine alte, von uns vergebene Ingest-URL durch die aktuelle. Eigene Werte bleiben. True = geändert."""
+    cur = (config.get("d1_ingest_url") or "").rstrip("/")
+    if cur and cur in OLD_D1_INGEST_URLS and cur != DEFAULT_D1_INGEST_URL:
+        config["d1_ingest_url"] = DEFAULT_D1_INGEST_URL
+        return True
+    return False

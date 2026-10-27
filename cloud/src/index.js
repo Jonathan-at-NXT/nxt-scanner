@@ -282,7 +282,7 @@ export default {
 
     // ── Alte Seiten abgeschaltet (Jonathan 25.10.): Ansicht nur noch im Dashboard nxt-storage ──
     if (["/dashboard", "/dashboard.json", "/board", "/board.json"].includes(url.pathname)) {
-      return new Response("Abgeschaltet – das Dashboard liegt jetzt unter https://nxt-storage.nxtstudios.workers.dev\n",
+      return new Response(`Abgeschaltet – das Dashboard liegt jetzt unter ${env.DASHBOARD_URL || "https://nxt-storage.nxtstudios.workers.dev"}\n`,
         { status: 410, headers: { "content-type": "text/plain; charset=utf-8" } });
     }
 

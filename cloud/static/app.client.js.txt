@@ -521,7 +521,7 @@
     const fd = new FormData(e.target);
     try {
       const r = await post("/api/briefkasten/link", { name: fd.get("name"), days: fd.get("days"), max_gb: fd.get("max_gb") || null, note: fd.get("note") || null });
-      const link = "https://nxt-scanner-ingest.nxtstudios.workers.dev/u/" + r.token;
+      const link = r.link || "https://nxt-scanner-ingest.nxtstudios.workers.dev/u/" + r.token;
       try { await navigator.clipboard.writeText(link); toast("Link erstellt und kopiert"); } catch { toast("Link erstellt"); }
       await render(); const out = $("#newlink-out"); if (out) out.textContent = link;
     } catch (err) { toast(err.message, true); }
