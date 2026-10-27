@@ -493,6 +493,16 @@ export default {
         )
       );
 
+      // Rollout-Stand je Person: der neue Scanner schickt fs_used_bytes (ab 2.0.3 auch client_version), der alte nicht
+      if (disk.last_user) {
+        const gen = (payload.client_version || "fs_used_bytes" in disk) ? "neu" : "alt";
+        stmts.push(env.DB.prepare(
+          `INSERT INTO scanner_seen(user, at, generation, client_version, disk_name) VALUES(?,?,?,?,?)
+           ON CONFLICT(user) DO UPDATE SET at=excluded.at, generation=excluded.generation,
+             client_version=excluded.client_version, disk_name=excluded.disk_name`
+        ).bind(disk.last_user, new Date().toISOString(), gen, payload.client_version ?? null, disk.name ?? null));
+      }
+
       // delete+insert folder_tree je disk
       stmts.push(env.DB.prepare(`DELETE FROM folder_tree WHERE disk_uuid=?`).bind(uuid));
       for (const n of tree) {

@@ -100,7 +100,8 @@ def build_payload(report: dict, user_name: str = "") -> dict:
         "fs_used_bytes": usage.get("used_bytes"),
         "last_scan": si.get("scan_date"), "last_user": user_name or None,
     }
-    return {"disk": disk_row, "folder_tree": tree}
+    from . import __version__
+    return {"disk": disk_row, "folder_tree": tree, "client_version": __version__}
 
 
 def ingest_report(report: dict, conn: sqlite3.Connection, user_name: str = "") -> dict:
