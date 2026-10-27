@@ -1,0 +1,38 @@
+# PHASE 1 CF-Umzug: Konfig für den NEUEN Account (nxt-studios). Ersetzt beim Cutover die bisherige Datei.
+# NXT Speicher-Dashboard. Eigener Worker, damit Cloudflare Access nur ihn schützt
+# (die Scanner laden weiter ohne Login über nxt-scanner-ingest hoch).
+name = "nxt-storage"
+main = "src/dashboard.js"
+compatibility_date = "2026-07-24"
+account_id = "7166b140336f03b2cc698de4b49e128e"
+workers_dev = true
+
+[vars]
+PUBLIC_INGEST_URL = "https://nxt-scanner-ingest.nxt-studios.workers.dev"
+DASHBOARD_URL = "https://nxt-storage.nxt-studios.workers.dev"
+# Cloudflare Access (Zero Trust): Team-Domain und Application-AUD nach der Einrichtung eintragen.
+# Leer = Dashboard bleibt komplett gesperrt.
+ACCESS_TEAM_DOMAIN = ""
+ACCESS_AUD = ""   # neue Access-App auf 7166b140 anlegen, dann eintragen (leer = gesperrt)
+ALLOWED_EMAIL_DOMAINS = "nxtstudios.de"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nxt-scanner"
+database_id = "187ea766-ee3c-4b0e-8d59-133ae1b1533f"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html", "**/*.css", "**/*.txt"]
+fallthrough = true
+
+[[rules]]
+type = "Data"
+globs = ["**/*.woff2"]
+fallthrough = true
+
+# Datei-Katalog (EU): für Befunde wie leere Dateien (0 Byte)
+[[d1_databases]]
+binding = "CATALOG"
+database_name = "nxt-catalog"
+database_id = "b87661a6-6eaf-43db-96c2-390775e68386"

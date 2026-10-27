@@ -1,0 +1,38 @@
+# PHASE 1 CF-Umzug: Konfig für den NEUEN Account (nxt-studios). Ersetzt beim Cutover die bisherige Datei.
+# NXT Scanner Ingest-Worker
+# Enthaelt NUR nicht-geheime IDs. Der Ingest-Token ist ein CF-Secret
+# (wrangler secret put INGEST_TOKEN) und liegt NIE im Repo.
+
+name = "nxt-scanner-ingest"
+main = "src/index.js"
+compatibility_date = "2026-07-24"
+account_id = "7166b140336f03b2cc698de4b49e128e"
+
+[vars]
+PUBLIC_INGEST_URL = "https://nxt-scanner-ingest.nxt-studios.workers.dev"
+DASHBOARD_URL = "https://nxt-storage.nxt-studios.workers.dev"
+# Nicht geheim: Notion-DB-IDs. Der Notion-Token ist ein CF-Secret (NOTION_TOKEN).
+HDD_DB_ID = "31b8ae70-295b-811b-b0c9-daa586563078"
+SPEICHERUNGEN_DB_ID = "31b8ae70-295b-814e-88ed-f7caaabfaab6"
+SLACK_CHANNEL = "C0C6LSYFL1Z"   # einziger Kanal, in dem der NXT Data Agent liest und antwortet
+
+# Notion-Spiegel aus D1 (ersetzt den Notion-Sync im Scanner)
+[triggers]
+crons = []   # erst beim Cutover wieder ["*/15 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nxt-scanner"
+database_id = "187ea766-ee3c-4b0e-8d59-133ae1b1533f"
+
+# Datei-Katalog (eigene D1, EU-Jurisdiktion): jede Datei je Datenträger, nur Metadaten
+[[d1_databases]]
+binding = "CATALOG"
+database_name = "nxt-catalog"
+database_id = "b87661a6-6eaf-43db-96c2-390775e68386"
+
+# Upload-Briefkasten (EU): Zwischenlager bis der Abholer die Datei aufs NAS geschrieben und geprüft hat
+[[r2_buckets]]
+binding = "BRIEFKASTEN"
+bucket_name = "nxt-briefkasten"
+jurisdiction = "eu"
