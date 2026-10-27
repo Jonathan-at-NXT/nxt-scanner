@@ -800,6 +800,7 @@
   async function render() {
     const [path, qs] = (location.hash.slice(2) || "uebersicht").split("?");
     current = pages[path] ? path : "uebersicht";
+    $("#jobs").hidden = current !== "protokoll" || !$("#jobs").innerHTML.trim();   // Laufende Arbeiten nur im Protokoll
     document.querySelectorAll(".pages a").forEach((a) => a.classList.toggle("active", a.dataset.page === current));
     const params = new URLSearchParams(qs || "");
     const html = await pages[current](params);
@@ -891,7 +892,7 @@
 
   load().then(render).catch((e) => { $("#view").innerHTML = `<div class="empty">Konnte Daten nicht laden: ${esc(e.message)}</div>`; });
 
-  // ── Laufende Arbeiten: Balken oben, alle 10 s wenn etwas läuft, sonst jede Minute ──
+  // ── Laufende Arbeiten: Balken oben (nur im Protokoll), alle 10 s wenn etwas läuft, sonst jede Minute ──
   const KIND = { inventur: "Erfassung", scan: "Scan", hash: "Prüfsummen", kopie: "Kopie", lesetest: "Lesetest", vorgang: "Vorgang", pruefung: "Prüfung" };
   // Fortschritt nach Bytes (Kopien, Prüfungen) oder nach Anzahl (Dateien, Ordner, Schritte)
   const byBytes = (j) => !j.total_files && j.total_bytes > 0;
@@ -906,7 +907,7 @@
     try { data = await (await fetch("/api/progress")).json(); } catch { return setTimeout(pollJobs, 60000); }
     const box = $("#jobs");
     const all = [...data.jobs, ...data.stalled.map((j) => ({ ...j, _stalled: true }))];
-    box.hidden = !all.length;
+    box.hidden = !all.length || current !== "protokoll";
     box.innerHTML = all.map((j) => {
       const secs = Math.max(1, (Date.parse(j.updated_at) - Date.parse(j.started_at)) / 1000);
       const rate = (byBytes(j) ? (j.done_bytes || 0) : j.done_files) / secs;
