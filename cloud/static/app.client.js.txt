@@ -192,7 +192,6 @@
       const seg = (k, cls) => `<span class="${cls}" style="width:${(o.copies[k] / tot) * 100}%"></span>`;
       const ts = o.tier_stats || {};
       const tiers = Object.entries(ts).sort((a, b) => b[1].used_tb - a[1].used_tb);
-      const tierMax = Math.max(1, ...tiers.map((t) => t[1].used_tb));
       const sum = (k) => tiers.reduce((a, [, x]) => a + (x[k] || 0), 0);
       const c = S.content, bal = S.cleanup && S.cleanup.balance;
       const secured = c ? c.two_gb + c.three_gb : 0;
@@ -224,7 +223,8 @@
             <td class="r num">${x.cap_known ? fmtTb(x.free_tb) : "–"}</td>
             <td class="r num">${o.prices_eur_per_tb?.[t] ? (o.prices_eur_per_tb[t] / 1000).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 3 }) : "–"}</td>
             <td class="r num">${x.value_eur ? fmtEur(x.value_eur) : "–"}</td>
-            <td><div class="fill" style="width:100%"><span style="width:${(x.used_tb / tierMax) * 100}%"></span></div></td></tr>`).join("")}
+            <td>${x.cap_known ? `<div class="fill" style="width:100%" title="${Math.round(Math.min(1, x.used_tb / x.cap_tb) * 100)} % belegt"><span style="width:${Math.min(1, x.used_tb / x.cap_tb) * 100}%"></span></div>
+              <div class="sub">${Math.round(Math.min(1, x.used_tb / x.cap_tb) * 100)} % belegt</div>` : ""}</td></tr>`).join("")}
         </tbody></table>
         <p class="hint">Neuwert = Kapazität × Neupreis je TB (Stand 10/2026, grob: externe HDD ~20 €, SSD ~90 €, NAS inkl. Gehäuse ~60 € je TB), ohne Arbeit und Strom. „Belegt“ zählt jede Kopie mit, „einmaliges Material“ jede Datei nur einmal (Datei-Abgleich, Dateien ab ${c ? c.min_file_mb : 50} MB, ${c ? fmtN(c.catalog_disks) : "–"} Datenträger im Katalog).</p>
       </div>
