@@ -385,8 +385,13 @@ function overview(projects, disks, findings) {
     disks_checked: realDisks.filter((d) => d.health).length,
     unsecured_partial: projects.filter((p) => p.level === "teilweise").length,
     savings_tb: Math.round(open.filter((f) => ["EXCESS_COPIES", "PARTIAL_COPY", "REF_EXTRA"].includes(f.type)).reduce((s, f) => s + (f.savings_gb || 0), 0) / 10) / 100,
-    tier_stats: Object.fromEntries(Object.entries(tierStats).map(([k, s]) => [k, { disks: s.disks, used_tb: tb(s.used_gb),
-      cap_tb: tb(s.cap_gb), free_tb: tb(s.free_gb), cap_known: s.cap_known }])),
+    tier_stats: Object.fromEntries(Object.entries(tierStats).map(([k, s]) => {
+      if (k === "NAS" && !s.cap_known) { s.cap_gb = NAS_CAP_TB * 1000; s.free_gb = Math.max(0, s.cap_gb - s.used_gb); s.cap_known = s.disks; }
+      const price = PRICE_EUR_PER_TB[k];
+      return [k, { disks: s.disks, used_tb: tb(s.used_gb), cap_tb: tb(s.cap_gb), free_tb: tb(s.free_gb), cap_known: s.cap_known,
+                   value_eur: price ? Math.round((tb(s.cap_gb) || tb(s.used_gb)) * price / 100) * 100 : null }];
+    })),
+    prices_eur_per_tb: PRICE_EUR_PER_TB,
     findings: byPrio, tier_tb: Object.fromEntries(Object.entries(tierGb).map(([k, v]) => [k, Math.round(v / 10) / 100])),
     next: unsecured.sort((a, b) => b.missing_gb - a.missing_gb).slice(0, 8)
       .map((p) => ({ id: p.id, name: `${p.date} ${p.name}`, size_gb: p.size_gb, missing_gb: p.missing_gb, level: p.level,
@@ -409,6 +414,11 @@ export const PHASE1_SINCE = "2026-10-22T00:00:00+02:00";
 const MARGIN = 0.05;                 // Ziele nie über 95 % füllen
 const SMALL_TB = 6;                  // Platten bis zu dieser Größe kommen in den Runden zuletzt
 const PORTS = 3;                     // Anschlüsse; ein Gehäuse mit mehreren Platten belegt nur einen
+// Neupreis je TB Kapazität (Stand 10/2026, grob): externe HDD ~20 €, T7-Shield-Klasse ~90 €,
+// NAS inkl. Gehäuse und Paritätsplatte ~60 € je nutzbarem TB. Für „Wert“ und „Kosten je GB“ in der Übersicht.
+export const PRICE_EUR_PER_TB = { HDD: 20, SSD: 90, NAS: 60 };
+// Nutzbare NAS-Kapazität (df auf der Freigabe: 87 TiB); über SMB kommt pro Freigabe keine verlässliche Zahl an
+export const NAS_CAP_TB = 95.7;
 export const DEFAULT_RESERVE_MONTHS = 3;   // Platz für neue Drehs, die in dieser Zeit dazukommen (einstellbar)
 
 /**

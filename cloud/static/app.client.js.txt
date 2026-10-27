@@ -5,6 +5,7 @@
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const fmtGb = (g) => (g == null ? "–" : g >= 1000 ? (g / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " TB"
     : g.toLocaleString("de-DE", { maximumFractionDigits: g < 10 ? 1 : 0 }) + " GB");
+  const fmtEur = (e) => "€ " + Math.round(e ?? 0).toLocaleString("de-DE");
   const fmtTb = (t) => (t ?? 0).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " TB";
   const fmtN = (n) => (n ?? 0).toLocaleString("de-DE");
   // Zeitpunkt mit Uhrzeit: "heute 15:40", "gestern 09:12", sonst "21.10.26, 14:03"
@@ -213,16 +214,19 @@
           ${c ? `<div class="kpi"><div class="label">Einmaliges Material</div><div class="value num">${fmtGb(c.unique_gb)}</div><div class="sub">jede Datei nur einmal gezählt</div></div>
           <div class="kpi"><div class="label">Davon mind. 2× gesichert</div><div class="value num" style="color:var(--ok)">${fmtGb(secured)}</div><div class="sub">${fmtGb(c.two_gb)} genau 2× · ${fmtGb(c.three_gb)} 3× oder öfter</div></div>` : ""}
           <div class="kpi"><div class="label">Belegt insgesamt</div><div class="value num">${fmtTb(sum("used_tb"))}</div><div class="sub">auf ${fmtN(sum("disks"))} Datenträgern, inkl. aller Kopien</div></div>
+          <div class="kpi"><div class="label">Neuwert der Speicher</div><div class="value num">${fmtEur(sum("value_eur"))}</div><div class="sub">${c ? `≈ ${(sum("value_eur") / (c.unique_gb || 1)).toLocaleString("de-DE", { maximumFractionDigits: 2 })} € je GB einmaliges Material` : "nach aktuellen Preisen"}</div></div>
           <div class="kpi"><div class="label">Frei</div><div class="value num">${fmtTb(sum("free_tb"))}</div><div class="sub">von ${fmtTb(sum("cap_tb"))} Kapazität (wo bekannt)</div></div>
         </div>
-        <table class="table"><thead><tr><th>Speicherstufe</th><th class="r">Datenträger</th><th class="r">belegt</th><th class="r">Kapazität</th><th class="r">frei</th><th style="width:30%"></th></tr></thead><tbody>
+        <table class="table"><thead><tr><th>Speicherstufe</th><th class="r">Datenträger</th><th class="r">belegt</th><th class="r">Kapazität</th><th class="r">frei</th><th class="r">€/GB</th><th class="r">Neuwert</th><th style="width:22%"></th></tr></thead><tbody>
           ${tiers.map(([t, x]) => `<tr><td>${tierBadge(t === "unbekannt" ? null : t)} <span class="muted">${t === "unbekannt" ? "ohne Stufe" : ""}</span></td>
             <td class="r num">${fmtN(x.disks)}</td><td class="r num">${fmtTb(x.used_tb)}</td>
             <td class="r num">${x.cap_known ? fmtTb(x.cap_tb) + (x.cap_known < x.disks ? ` <span class="sub">(${x.cap_known} von ${x.disks})</span>` : "") : "–"}</td>
             <td class="r num">${x.cap_known ? fmtTb(x.free_tb) : "–"}</td>
+            <td class="r num">${o.prices_eur_per_tb?.[t] ? (o.prices_eur_per_tb[t] / 1000).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 3 }) : "–"}</td>
+            <td class="r num">${x.value_eur ? fmtEur(x.value_eur) : "–"}</td>
             <td><div class="fill" style="width:100%"><span style="width:${(x.used_tb / tierMax) * 100}%"></span></div></td></tr>`).join("")}
         </tbody></table>
-        <p class="hint">„Belegt“ zählt jede Kopie mit, „einmaliges Material“ jede Datei nur einmal (Datei-Abgleich, Dateien ab ${c ? c.min_file_mb : 50} MB, ${c ? fmtN(c.catalog_disks) : "–"} Datenträger im Katalog).</p>
+        <p class="hint">Neuwert = Kapazität × Neupreis je TB (Stand 10/2026, grob: externe HDD ~20 €, SSD ~90 €, NAS inkl. Gehäuse ~60 € je TB), ohne Arbeit und Strom. „Belegt“ zählt jede Kopie mit, „einmaliges Material“ jede Datei nur einmal (Datei-Abgleich, Dateien ab ${c ? c.min_file_mb : 50} MB, ${c ? fmtN(c.catalog_disks) : "–"} Datenträger im Katalog).</p>
       </div>
       ${c ? `<div class="panel section"><div class="stack" style="height:14px;margin-bottom:8px"><span class="c0" style="width:${(c.only1_gb / (c.unique_gb || 1)) * 100}%"></span><span class="c2" style="width:${(c.two_gb / (c.unique_gb || 1)) * 100}%"></span><span class="c3" style="width:${(c.three_gb / (c.unique_gb || 1)) * 100}%"></span></div>
         <div class="legend"><span><i class="c0"></i>nur 1× · ${fmtGb(c.only1_gb)}</span><span><i class="c2"></i>genau 2× · ${fmtGb(c.two_gb)}</span><span><i class="c3"></i>3× oder öfter · ${fmtGb(c.three_gb)}</span></div></div>` : ""}

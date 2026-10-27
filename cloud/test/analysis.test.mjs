@@ -120,7 +120,7 @@ test("unplausible Kapazität (kleiner als die Dateien) wird ignoriert", () => {
 test("Kennzahlen je Speicherstufe: Anzahl, belegt, Kapazität, frei", () => {
   const d = (uuid, name, usedGb, capGb) => ({ uuid, name, used_bytes: usedGb * GB, capacity_bytes: capGb * GB, last_scan: "2026-10-24T10:00:00Z" });
   const a = analyze({ disks: [d("A", "TOWER 10", 3000, 4000), d("B", "TOWER 11", 1000, 4000), d("C", "NXT 013", 500, 2000)], projects: [] });
-  assert.deepEqual(a.overview.tier_stats.HDD, { disks: 2, used_tb: 4, cap_tb: 8, free_tb: 4, cap_known: 2 });
+  assert.deepEqual(a.overview.tier_stats.HDD, { disks: 2, used_tb: 4, cap_tb: 8, free_tb: 4, cap_known: 2, value_eur: 200 });
   assert.equal(a.overview.tier_stats.SSD.free_tb, 1.5);
 });
 
@@ -130,4 +130,5 @@ test("Kennzahlen: NAS-Freigaben zählen als ein Gerät", () => {
     { disk_uuid: "nas:NXTCLOUD/NXT STUDIOS", tier: "NAS" }, { disk_uuid: "nas:NXTCLOUD/homes", tier: "NAS" }], projects: [] });
   assert.equal(a.overview.tier_stats.NAS.disks, 1);
   assert.equal(a.overview.tier_stats.NAS.used_tb, 80.5);
+  assert.equal(a.overview.tier_stats.NAS.cap_tb, 95.7);   // feste NAS-Kapazität, SMB liefert keine
 });
