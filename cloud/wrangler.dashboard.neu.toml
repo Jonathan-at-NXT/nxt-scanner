@@ -12,8 +12,8 @@ PUBLIC_INGEST_URL = "https://nxt-scanner-ingest.nxt-studios.workers.dev"
 DASHBOARD_URL = "https://nxt-storage.nxt-studios.workers.dev"
 # Cloudflare Access (Zero Trust): Team-Domain und Application-AUD nach der Einrichtung eintragen.
 # Leer = Dashboard bleibt komplett gesperrt.
-ACCESS_TEAM_DOMAIN = ""
-ACCESS_AUD = ""   # neue Access-App auf 7166b140 anlegen, dann eintragen (leer = gesperrt)
+ACCESS_TEAM_DOMAIN = "curly-king-500f.cloudflareaccess.com"
+ACCESS_AUD = "7387272346f8edae800b01e71a18a856db9b5f8974d4271795d1f9c9f0f5ca5d"
 ALLOWED_EMAIL_DOMAINS = "nxtstudios.de"
 
 [[d1_databases]]
