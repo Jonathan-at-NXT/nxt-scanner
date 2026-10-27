@@ -11,6 +11,7 @@ account_id = "46b4ead777c6a2df24459b42e738f28f"
 # Nicht geheim: Notion-DB-IDs. Der Notion-Token ist ein CF-Secret (NOTION_TOKEN).
 HDD_DB_ID = "31b8ae70-295b-811b-b0c9-daa586563078"
 SPEICHERUNGEN_DB_ID = "31b8ae70-295b-814e-88ed-f7caaabfaab6"
+SLACK_CHANNEL = "C0C6LSYFL1Z"   # einziger Kanal, in dem der NXT Data Agent liest und antwortet
 
 # Notion-Spiegel aus D1 (ersetzt den Notion-Sync im Scanner)
 [triggers]

@@ -14,12 +14,14 @@ test("Slack-Signatur: gültig, falsch, zu alt", async () => {
   assert.equal(await verifySlack(h(sign("geheim", ts, body)), body, "", 1700000010), false);
 });
 
-test("Slack-Events: nur Menschen, DM oder Erwähnung", () => {
-  const dm = { type: "message", channel_type: "im", user: "U1", channel: "D1", ts: "1.2", text: "Stand?" };
-  assert.deepEqual(chatMessageFromEvent(dm), { user: "U1", channel: "D1", ts: "1.2", thread: null, text: "Stand?" });
-  assert.equal(chatMessageFromEvent({ ...dm, bot_id: "B1" }), null);
-  assert.equal(chatMessageFromEvent({ ...dm, subtype: "message_changed" }), null);
-  assert.equal(chatMessageFromEvent({ ...dm, channel_type: "channel" }), null);
-  const m = chatMessageFromEvent({ type: "app_mention", user: "U1", channel: "C1", ts: "3.4", text: "<@U9> Zwischenstand" });
+test("Slack-Events: nur Menschen im freigegebenen Kanal", () => {
+  const msg = { type: "message", channel_type: "channel", user: "U1", channel: "C1", ts: "1.2", text: "Stand?" };
+  assert.deepEqual(chatMessageFromEvent(msg, "C1"), { user: "U1", channel: "C1", ts: "1.2", thread: null, text: "Stand?" });
+  assert.equal(chatMessageFromEvent(msg, "C2"), null);
+  assert.equal(chatMessageFromEvent(msg, undefined), null);
+  assert.equal(chatMessageFromEvent({ ...msg, channel: "D1", channel_type: "im" }, "C1"), null);
+  assert.equal(chatMessageFromEvent({ ...msg, bot_id: "B1" }, "C1"), null);
+  assert.equal(chatMessageFromEvent({ ...msg, subtype: "message_changed" }, "C1"), null);
+  const m = chatMessageFromEvent({ type: "app_mention", user: "U1", channel: "C1", ts: "3.4", text: "<@U9> Zwischenstand" }, "C1");
   assert.equal(m.text, "Zwischenstand");
 });
