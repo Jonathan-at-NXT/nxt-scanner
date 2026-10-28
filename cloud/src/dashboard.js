@@ -587,6 +587,18 @@ export default {
         });
         return json({ disk: dn.get(disk) || disk, items, total: zs.length, healable: items.filter((x) => x.heil.length).length });
       }
+      if (url.pathname === "/api/loeschliste") {
+        // NAS-Parkordner zum Nachprüfen: ohne p die Projekte, mit p die Dateien eines Projekts samt Gegenkopien
+        const p = url.searchParams.get("p");
+        if (p) {
+          const proj = await env.DB.prepare("SELECT * FROM nas_loesch_proj WHERE id=?").bind(p).first();
+          const files = (await env.DB.prepare("SELECT path, gb, hash, kopien FROM nas_loesch_file WHERE proj=? ORDER BY path").bind(p).all()).results || [];
+          return json({ proj, files: files.map((f) => ({ ...f, kopien: JSON.parse(f.kopien || "[]") })) });
+        }
+        const meta = Object.fromEntries(((await env.DB.prepare("SELECT k, v FROM nas_loesch_meta").all()).results || []).map((r) => [r.k, JSON.parse(r.v)]));
+        const projs = (await env.DB.prepare("SELECT * FROM nas_loesch_proj ORDER BY gb DESC").all()).results || [];
+        return json({ meta, projs: projs.map((x) => ({ ...x, geraete: JSON.parse(x.geraete || "[]") })) });
+      }
       if (url.pathname === "/api/audit") {
         const rows = (await env.DB.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 300").all()).results || [];
         return json({ rows });

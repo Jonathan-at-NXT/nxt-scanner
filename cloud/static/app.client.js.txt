@@ -112,7 +112,7 @@
       const nAge = (k) => triageAll.filter(ageF[k]).length;
       const sel = ui.clean.sel;
       return `
-      <div class="head"><div><h1>Aufräumen</h1><p>Erst Überblick, dann entscheiden, dann vervollständigen, dann Platz freigeben. Der Plan rechnet nach jedem Scan und jeder Entscheidung neu.</p></div></div>
+      <div class="head"><div><h1>Aufräumen</h1><p>Erst Überblick, dann entscheiden, dann vervollständigen, dann Platz freigeben. Der Plan rechnet nach jedem Scan und jeder Entscheidung neu. <a href="#/loeschliste">NAS-Löschliste →</a></p></div></div>
       <div class="steps">
         ${step(1, "Überblick", `${fmtN(c.phase1.fresh)} / ${fmtN(c.phase1.total)} Platten aktuell${c.phase1.nas_missing ? " · NAS fehlt" : ""}`)}
         ${step(2, "Entscheiden", `${fmtN(c.phase2.open)} Projekte offen · ${fmtGb(c.phase2.open_gb)}`)}
@@ -480,6 +480,42 @@
         ${files.map((f) => `<tr><td class="mono" style="word-break:break-all">${esc(f.rel_path)}${f.error ? `<div class="sub" style="color:var(--crit)">${esc(f.error)}</div>` : ""}</td><td>${esc(nameOf.get(f.token) || "")}</td>
           <td class="num r">${fmtGb(f.size / 1e9)}</td><td><span class="row" style="gap:6px"><span class="dot ${(ST[f.state] || ["", f.state])[0]}"></span>${esc((ST[f.state] || ["", f.state])[1])}</span>
           <div class="sub">${f.pulled_at ? rel(f.pulled_at) : f.uploaded_at ? rel(f.uploaded_at) : rel(f.created_at)}</div></td></tr>`).join("")}</tbody></table>` : '<div class="empty">Noch nichts hochgeladen.</div>'}</div>`;
+    },
+    async loeschliste(params) {
+      const id = params.get("p");
+      const s = q().toLowerCase();
+      const park = "NXT STUDIOS / _ZU LOESCHEN (geprüft doppelt)";
+      if (id) {
+        const { proj, files } = await (await fetch("/api/loeschliste?p=" + encodeURIComponent(id))).json();
+        if (!proj) return `<div class="empty">Projekt nicht gefunden. <a href="#/loeschliste">Zur Liste</a></div>`;
+        const hit = files.filter((f) => !s || f.path.toLowerCase().includes(s) || f.kopien.some((k) => k[0].toLowerCase().includes(s)));
+        const shown = hit.slice(0, 2000);
+        return `<div class="head"><div><p><a href="#/loeschliste">← NAS-Löschliste</a></p><h1>${esc(proj.projekt)}</h1>
+          <p>${fmtN(proj.dateien)} Dateien · ${fmtGb(proj.gb)} im Parkordner <span class="mono">${esc(park)}</span>. „gleicher Pfad“ heißt: auf der Platte unter demselben Ordnerpfad wie auf dem NAS, ohne den Bereich vorne.</p></div></div>
+        <div class="panel"><table class="table"><thead><tr><th>Datei</th><th class="r">Größe</th><th>Prüfsumme</th><th>Gegenkopien</th></tr></thead><tbody>
+          ${shown.map((f) => `<tr><td class="mono" style="word-break:break-all">${esc(f.path)}</td><td class="num r">${fmtGb(f.gb)}</td><td class="mono sub">${esc(f.hash)}…</td>
+            <td>${f.kopien.map((k) => `<div><b>${esc(k[0])}</b> <span class="sub mono" style="word-break:break-all">${k[1] === "=" ? "gleicher Pfad" : esc(k[1])}</span></div>`).join("")}</td></tr>`).join("")}</tbody></table>
+          ${hit.length > shown.length ? `<p class="hint">${fmtN(hit.length - shown.length)} weitere Dateien. Oben suchen, um einzugrenzen.</p>` : ""}</div>`;
+      }
+      const { meta, projs } = await (await fetch("/api/loeschliste")).json();
+      const list = projs.filter((x) => !s || x.projekt.toLowerCase().includes(s) || x.geraete.some((g) => g[0].toLowerCase().includes(s)));
+      return `<div class="head"><div><h1>NAS-Löschliste</h1><p>Was im NAS-Parkordner <span class="mono">${esc(park)}</span> liegt, mit den Gegenkopien je Datei. Stand ${esc(rel(meta.stand))}.</p></div></div>
+      <div class="grid kpis">
+        <div class="panel kpi"><div class="label">Im Parkordner</div><div class="value num">${fmtN(meta.dateien)}</div><div class="sub">${String(meta.tb).replace(".", ",")} TB · ${fmtN(projs.length)} Projekte</div></div>
+        <div class="panel kpi"><div class="label">Unter 2 Kopien</div><div class="value num" style="color:${meta.unter2 ? "var(--crit)" : "var(--ok)"}">${fmtN(meta.unter2)}</div></div>
+        <div class="panel kpi"><div class="label">Größe abweichend</div><div class="value num" style="color:${meta.groesse_anders ? "var(--crit)" : "var(--ok)"}">${fmtN(meta.groesse_anders)}</div></div>
+        <div class="panel kpi"><div class="label">Schon weg</div><div class="value num">${fmtN(meta.nicht_mehr_da)}</div><div class="sub">nicht mehr im Parkordner</div></div>
+      </div>
+      <div class="panel section"><h3>So prüfst du selbst</h3><ol class="hint">
+        <li>Jede Zeile ist ein Projektordner im Parkordner, daneben die Geräte, auf denen die Dateien noch liegen, und wie viele.</li>
+        <li>Ein Klick aufs Projekt zeigt jede Datei mit ihren Gegenkopien.</li>
+        <li>Stichprobe: Platte anstecken, Ordner im Finder öffnen, Dateiname und Größe vergleichen.</li>
+        <li>Eine Datei kam nur in den Parkordner, wenn die volle Prüfsumme (blake2b) auf dem NAS und auf zwei anderen Geräten gleich und die Datei nicht leer war.</li>
+        <li>„NAS (behaltene Ablage)“: dieselbe Datei liegt auf dem NAS noch an einem anderen Ort, der bleibt. Das NAS zählt höchstens einmal.</li>
+        <li>Gelöschte NAS-Dateien landen zuerst im Synology-Papierkorb (#recycle). Erst wenn der geleert ist, ist der Platz frei.</li></ol></div>
+      <div class="panel">${list.length ? `<table class="table"><thead><tr><th>Projekt</th><th class="r">Dateien</th><th class="r">Größe</th><th>Gegenkopien auf</th></tr></thead><tbody>
+        ${list.map((x) => `<tr><td><a href="#/loeschliste?p=${esc(x.id)}"><b>${esc(x.projekt)}</b></a></td><td class="num r">${fmtN(x.dateien)}</td><td class="num r">${fmtGb(x.gb)}</td>
+          <td class="sub">${x.geraete.map((g) => `${esc(g[0])} (${fmtN(g[1])})`).join(" · ")}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">Kein Projekt passt zur Suche.</div>`}</div>`;
     },
     async leer(params) {
       const disk = params.get("d");
