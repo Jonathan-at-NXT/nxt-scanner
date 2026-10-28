@@ -34,7 +34,7 @@ export function handoverPage(items, person, { me = "", generatedAt = new Date().
   }).join("");
   return `<!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow"><title>Übergabe an ${esc(who)}</title><link rel="stylesheet" href="/app.css">
+<meta name="robots" content="noindex, nofollow"><title>Übergabe an ${esc(who)}</title><link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAEKSURBVHgB7ZbhDYMgEIVfmw7gCIzgCK7QCXSDdoPaDdygbuIIjqAbtBu0kGgiFLhDtH/Kl7xE4x3vgYEAJBL/zgHhZFL54n2cNJNPNbtQSD2l3gsNi+/C+EbqCD6lVIcdZ0eZu2YRtQJgUBIDRAU4EeY3qRp8XlJn6L9JPV+mcCZ3EOacWQyeMZR57+irsYG5L4DwmF+x0ryfDKkAwlKnpLZwhQjzjBFAeMzzWHMQAXJ8H1RzjfCZPzzmrVHrClD8wtwVoIR75QQIQsxtAVzqwDy2bc2Np54ToEUAZnNN1FMBGgQSYk4F4PQ7A9TM+mFLc6xotgWosBJ1JRPQr1QUAvrWGhHWn0gkND6j9AeYNN6s7wAAAABJRU5ErkJggg=="><link rel="stylesheet" href="/app.css">
 <script src="/handover.js" defer></script></head>
 <body><header class="topbar"><span class="brand"><span class="brand-nxt">NXT</span><span class="brand-sub">Übergabe an ${esc(who)}</span></span>
 <div class="me">${esc(me)}</div></header>
