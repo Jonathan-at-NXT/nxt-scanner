@@ -536,11 +536,14 @@ export default {
       if (url.pathname === "/handover.js") return respond(HANDOVER_JS, "text/javascript; charset=utf-8");
       if (url.pathname === "/dropbox" || url.pathname === "/dropbox/") return new Response(null, { status: 302, headers: { location: "/#/dropbox" } });
       if (url.pathname === "/api/chat") {
-        const after = Number(url.searchParams.get("after")) || 0;
+        // after = neue Nachrichten (Polling), before = ältere beim Hochscrollen; limit = wie viele (max. 200)
+        const after = Number(url.searchParams.get("after")) || 0, before = Number(url.searchParams.get("before")) || 0;
+        const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 200));
         const rows = (await env.DB.prepare(
-          "SELECT * FROM (SELECT * FROM chat_message WHERE thread = ? AND id > ? ORDER BY id DESC LIMIT 200) ORDER BY id")
-          .bind(String(user.email).toLowerCase(), after).all()).results || [];
-        return json({ rows });
+          "SELECT * FROM (SELECT * FROM chat_message WHERE thread = ? AND id > ? AND (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?) ORDER BY id")
+          .bind(String(user.email).toLowerCase(), after, before, before, limit + 1).all()).results || [];
+        const more = rows.length > limit;
+        return json({ rows: more ? rows.slice(1) : rows, more });
       }
       if (url.pathname === "/api/dropbox") {
         const rows = (await env.DB.prepare("SELECT * FROM dropbox_folder").all()).results || [];
