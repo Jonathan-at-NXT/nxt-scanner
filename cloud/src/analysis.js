@@ -95,7 +95,7 @@ export const isProxyPath = (p) => {
   return parts.some((x) => /prox(y|ies)/i.test(x)) || /[_.\- ]proxy([_.\- ]|\.\w+$)/i.test(name) || /^proxy\./i.test(name);
 };
 
-export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0, zeroFiles = [], zeroMissing = null, proxyFiles = [], catalogDisks = null }) {
+export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0, zeroFiles = [], zeroMissing = null, proxyFiles = [], catalogDisks = null, nasSpace = null }) {
   const diskList = buildDisks(disks, diskMeta, projects, health);
   const disk = new Map(diskList.map((d) => [d.uuid, d]));
   const ruleBy = new Map(rules.map((r) => [r.rule_key, r]));
@@ -373,11 +373,11 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
   }
 
   out.sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.name.localeCompare(b.name));
-  return { projects: out, disks: diskList, findings, overview: overview(out, diskList, findings),
-           cleanup: cleanupPlan(out, diskList, findings, Date.now(), reserveMonths, legacyGb) };
+  return { projects: out, disks: diskList, findings, overview: overview(out, diskList, findings, nasSpace),
+           cleanup: cleanupPlan(out, diskList, findings, Date.now(), reserveMonths, legacyGb, nasSpace) };
 }
 
-function overview(projects, disks, findings) {
+function overview(projects, disks, findings, nasSpace = null) {
   const realDisks = disks.filter((d) => !d.fallback && !d.retired);
   const open = findings.filter((f) => f.status === "offen");
   const byPrio = { kritisch: 0, warnung: 0, info: 0 };
@@ -418,9 +418,13 @@ function overview(projects, disks, findings) {
     unsecured_partial: projects.filter((p) => p.level === "teilweise").length,
     savings_tb: Math.round(open.filter((f) => ["EXCESS_COPIES", "PARTIAL_COPY", "REF_EXTRA"].includes(f.type)).reduce((s, f) => s + (f.savings_gb || 0), 0) / 10) / 100,
     tier_stats: Object.fromEntries(Object.entries(tierStats).map(([k, s]) => {
-      if (k === "NAS" && !s.cap_known) { s.cap_gb = NAS_CAP_TB * 1000; s.free_gb = Math.max(0, s.cap_gb - s.used_gb); s.cap_known = s.disks; s.fill_used_gb = s.used_gb; }
+      // NAS: echte Belegung (df vom Sicherungs-Mac); die "_ZU LOESCHEN"-Parkordner zählen als frei
+      const nas = k === "NAS" && nasSpaceGb(nasSpace);
+      if (nas) { s.cap_gb = nas.cap_gb; s.used_gb = nas.used_gb; s.free_gb = nas.free_gb; s.cap_known = s.disks; s.fill_used_gb = nas.used_gb; s.park_gb = nas.park_gb; }
+      else if (k === "NAS" && !s.cap_known) { s.cap_gb = NAS_CAP_TB * 1000; s.free_gb = Math.max(0, s.cap_gb - s.used_gb); s.cap_known = s.disks; s.fill_used_gb = s.used_gb; }
       const price = PRICE_EUR_PER_TB[k];
       return [k, { disks: s.disks, used_tb: tb(s.used_gb), cap_tb: tb(s.cap_gb), free_tb: tb(s.free_gb), cap_known: s.cap_known,
+                   ...(s.park_gb != null ? { park_tb: tb(s.park_gb) } : {}),
                    fill: s.cap_gb ? Math.min(1, s.fill_used_gb / s.cap_gb) : null,   // nur Platten mit bekannter Kapazität
                    value_eur: price ? Math.round((tb(s.cap_gb) || tb(s.used_gb)) * price / 100) * 100 : null }];
     })),
@@ -452,7 +456,15 @@ const PORTS = 3;                     // Anschlüsse; ein Gehäuse mit mehreren P
 export const PRICE_EUR_PER_TB = { HDD: 25, SSD: 110, NAS: 65 };
 // Nutzbare NAS-Kapazität (df auf der Freigabe: 87 TiB); über SMB kommt pro Freigabe keine verlässliche Zahl an
 export const NAS_CAP_TB = 95.7;
-export const DEFAULT_RESERVE_MONTHS = 3;   // Platz für neue Drehs, die in dieser Zeit dazukommen (einstellbar)
+export const DEFAULT_RESERVE_MONTHS = 3;
+
+/** meta.nas_space (nas_platz.py: df + Parkordner) in GB; Parkordner = geprüft doppelt, zählt als frei. */
+export function nasSpaceGb(v) {
+  if (!v || !(v.cap_bytes > 0) || v.avail_bytes == null) return null;
+  const park = Math.max(0, v.park_bytes || 0);
+  const used = Math.max(0, (v.used_bytes ?? v.cap_bytes - v.avail_bytes) - park);
+  return { cap_gb: v.cap_bytes / 1e9, used_gb: used / 1e9, free_gb: Math.min(v.cap_bytes, v.avail_bytes + park) / 1e9, park_gb: park / 1e9, at: v.at || null };
+}   // Platz für neue Drehs, die in dieser Zeit dazukommen (einstellbar)
 
 /**
  * Plan in 4 Phasen, live aus den Daten:
@@ -461,7 +473,7 @@ export const DEFAULT_RESERVE_MONTHS = 3;   // Platz für neue Drehs, die in dies
  * 3 Vervollständigen: Kopieraufgaben (nur entschiedene 2×/3×-Projekte), gebündelt in Anschluss-Runden
  * 4 Freigeben: Platz aus überzähligen Kopien und "Löschbar"-Projekten
  */
-export function cleanupPlan(projects, disks, findings, now = Date.now(), reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0) {
+export function cleanupPlan(projects, disks, findings, now = Date.now(), reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0, nasSpace = null) {
   const real = disks.filter((d) => !d.fallback && !d.stale);
   const ageDays = (d) => (d.last_scan ? (now - Date.parse(d.last_scan)) / 86400000 : Infinity);
 
@@ -562,7 +574,8 @@ export function cleanupPlan(projects, disks, findings, now = Date.now(), reserve
 
   // Platzbilanz (Ziel-Platz auf HDD/NAS ohne 5 % Reserve)
   const freeHdd = real.filter((d) => ["HDD", "NAS"].includes(d.tier) && d.free_gb != null)
-    .reduce((s, d) => s + Math.max(0, d.free_gb - (d.capacity_gb || 0) * MARGIN), 0);
+    .reduce((s, d) => s + Math.max(0, d.free_gb - (d.capacity_gb || 0) * MARGIN), 0)
+    + (nasSpaceGb(nasSpace) ? Math.max(0, nasSpaceGb(nasSpace).free_gb - nasSpaceGb(nasSpace).cap_gb * MARGIN) : 0);
   const needAll = projects.filter((p) => !p.ok && p.sicherung_min >= 2).reduce((s, p) => s + (p.missing_gb || 0), 0);
   // Reserve für neue Drehs: Zuwachs der letzten 6 Monate (nach Projektdatum) × RESERVE_MONTHS, doppelt gesichert
   const since = now - 182 * 86400000;

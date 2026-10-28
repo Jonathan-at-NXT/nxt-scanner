@@ -158,3 +158,11 @@ test("Platte ohne Katalog: Proxies wie bei der bekannten Kopie angenommen", () =
   });
   assert.equal(a.projects[0].types[0].disks, 2);
 });
+
+test("NAS: Parkordner zählt als frei, Belegung ohne Parkordner", async () => {
+  const { nasSpaceGb } = await import("../src/analysis.js");
+  const v = nasSpaceGb({ cap_bytes: 96e12, used_bytes: 94e12, avail_bytes: 2e12, park_bytes: 19e12 });
+  assert.equal(Math.round(v.free_gb), 21000);
+  assert.equal(Math.round(v.used_gb), 75000);
+  assert.equal(nasSpaceGb(null), null);
+});

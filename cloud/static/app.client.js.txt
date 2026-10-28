@@ -220,7 +220,7 @@
           ${tiers.map(([t, x]) => `<tr><td>${tierBadge(t === "unbekannt" ? null : t)} <span class="muted">${t === "unbekannt" ? "ohne Stufe" : ""}</span></td>
             <td class="r num">${fmtN(x.disks)}</td><td class="r num">${fmtTb(x.used_tb)}</td>
             <td class="r num">${x.cap_known ? fmtTb(x.cap_tb) + (x.cap_known < x.disks ? ` <span class="sub">(${x.cap_known} von ${x.disks})</span>` : "") : "–"}</td>
-            <td class="r num">${x.cap_known ? fmtTb(x.free_tb) : "–"}</td>
+            <td class="r num">${x.cap_known ? fmtTb(x.free_tb) : "–"}${x.park_tb ? `<div class="sub" title="Parkordner „_ZU LOESCHEN“: geprüft doppelt, zählt als frei"><a href="#/loeschliste">davon ${fmtTb(x.park_tb)} zu löschen</a></div>` : ""}</td>
             <td class="r num">${o.prices_eur_per_tb?.[t] ? fmtEur(o.prices_eur_per_tb[t]) : "–"}</td>
             <td class="r num">${x.value_eur ? fmtEur(x.value_eur) : "–"}</td>
             <td>${x.cap_known ? `<div class="fill" style="width:100%" title="${Math.round(x.fill * 100)} % belegt"><span style="width:${x.fill * 100}%"></span></div>

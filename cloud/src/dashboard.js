@@ -112,6 +112,9 @@ async function loadState(env) {
     q("SELECT * FROM folder_override"), q("SELECT * FROM disk_health"),
   ]);
   const rm = await env.DB.prepare("SELECT value FROM meta WHERE key='cleanup_reserve_months'").first();
+  const ns = await env.DB.prepare("SELECT value FROM meta WHERE key='nas_space'").first();
+  let nasSpace = null;
+  try { nasSpace = ns ? JSON.parse(ns.value) : null; } catch { nasSpace = null; }
   const reserveMonths = rm ? Number(rm.value) : DEFAULT_RESERVE_MONTHS;
   const legacy = await loadLegacy(env, projects);
   let zeroFiles = [], zeroMissing = null;
@@ -138,14 +141,14 @@ async function loadState(env) {
   // Nils' Nummern-Ordner (keine Projekte der Liste): Aussortieren = alle Kopien frei, Nur 1× = alle bis auf eine
   const legacyGb = legacy.filter((x) => x.source === "nummer").reduce((s, x) => s + (x.decision === "aussortieren" ? x.total_gb
     : x.decision === "einfach" ? Math.max(0, x.total_gb - x.size_gb) : 0), 0);
-  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles, zeroMissing, proxyFiles, catalogDisks });
+  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles, zeroMissing, proxyFiles, catalogDisks, nasSpace });
   // Vorschläge aus dem Inhalts-Abgleich: offen und noch ohne Soll-Name
   const ovKeys = new Set(overrides.map((o) => `${o.disk_uuid}|${o.rel_path}`));
   const sugg = (await q("SELECT * FROM content_suggestion WHERE status='offen'")).filter((s) => !ovKeys.has(`${s.disk_uuid}|${s.rel_path}`));
   const dn = new Map(disks.map((d) => [d.uuid, d.name]));
   a.suggestions = sugg.map((s) => ({ ...s, disk: dn.get(s.disk_uuid) || "?" })).sort((x, y) => y.shared_gb - x.shared_gb);
   if (sugg.length) {
-    const b = analyze({ projects: applySuggestions(projects, sugg), disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles, zeroMissing });
+    const b = analyze({ projects: applySuggestions(projects, sugg), disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles, zeroMissing, nasSpace });
     const lv = (r) => Object.fromEntries(["einfach", "teilweise", "ok", "mehrfach"].map((k) => [k, r.projects.filter((p) => p.level === k).length]));
     a.cleanup.with_suggestions = { count: sugg.length, balance: b.cleanup.balance, levels: lv(b), levels_now: lv(a) };
   }
