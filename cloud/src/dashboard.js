@@ -111,8 +111,17 @@ async function loadState(env) {
     q("SELECT * FROM disk_meta"), q("SELECT * FROM project_rule"), q("SELECT * FROM finding_state"),
     q("SELECT * FROM folder_override"), q("SELECT * FROM disk_health"),
   ]);
+  // Seit dem letzten NAS-Scan geparkte Dateien (geprüft doppelt, zählen als frei) gehören nicht mehr zur NAS-Kopie
+  try {
+    const parked = new Map(((await env.DB.prepare("SELECT disk_uuid, rel_path, gb FROM nas_loesch_folder").all()).results || [])
+      .map((r) => [`${r.disk_uuid}|${r.rel_path}`, r.gb * 1e9]));
+    for (const p of projects) {
+      const b = p.disk_uuid.startsWith("nas:") && parked.get(`${p.disk_uuid}|${p.rel_path}`);
+      if (b) p.size_bytes = Math.max(0, (p.size_bytes || 0) - b);
+    }
+  } catch { /* Tabelle fehlt: unverändert */ }
   const rm = await env.DB.prepare("SELECT value FROM meta WHERE key='cleanup_reserve_months'").first();
-  const ns = await env.DB.prepare("SELECT value FROM meta WHERE key='nas_space'").first();
+  const ns =await env.DB.prepare("SELECT value FROM meta WHERE key='nas_space'").first();
   let nasSpace = null;
   try { nasSpace = ns ? JSON.parse(ns.value) : null; } catch { nasSpace = null; }
   const reserveMonths = rm ? Number(rm.value) : DEFAULT_RESERVE_MONTHS;
