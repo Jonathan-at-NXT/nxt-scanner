@@ -88,7 +88,14 @@ export function buildDisks(disks, metaRows, projects, healthRows = []) {
 }
 
 /** Projekte je Cluster inkl. Regel, Kopien je Typ, Befunde. */
-export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0, zeroFiles = [], zeroMissing = null }) {
+// Proxies lassen sich jederzeit neu erzeugen: nie nötig für "gesichert", fehlende Proxies sind keine fehlenden Dateien.
+export const isProxyPath = (p) => {
+  const parts = String(p).split("/");
+  const name = parts.pop() || "";
+  return parts.some((x) => /prox(y|ies)/i.test(x)) || /[_.\- ]proxy([_.\- ]|\.\w+$)/i.test(name) || /^proxy\./i.test(name);
+};
+
+export function analyze({ projects, disks, diskMeta = [], rules = [], states = [], health = [], reserveMonths = DEFAULT_RESERVE_MONTHS, legacyGb = 0, zeroFiles = [], zeroMissing = null, proxyFiles = [], catalogDisks = null }) {
   const diskList = buildDisks(disks, diskMeta, projects, health);
   const disk = new Map(diskList.map((d) => [d.uuid, d]));
   const ruleBy = new Map(rules.map((r) => [r.rule_key, r]));
@@ -109,6 +116,24 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       }
     }
   }
+  // Proxy-Bytes je Ordner (Katalog): werden von der Ordnergröße abgezogen, bevor Kopien verglichen werden
+  const proxyIn = new Map();
+  for (const f of proxyFiles) {
+    if (!isProxyPath(f.rel_path)) continue;
+    // wie bei leeren Dateien: Katalogpfad kann einen Bereich vorne haben (z. B. "NXT STUDIOS/…")
+    const parts = String(f.rel_path).split("/");
+    const seen = new Set();
+    for (let k = 0; k < Math.min(3, parts.length - 1); k++) {
+      // nur Bereichsordner überspringen, nie Projekt- oder Proxy-Ordner (sonst landet z. B. "…_PROXY/…/X_FOOTAGE" bei X_FOOTAGE)
+      if (k > 0 && (/^\d{4}-\d{2}-\d{2}/.test(parts[k - 1]) || /prox/i.test(parts[k - 1]))) break;
+      for (let j = k + 1; j < Math.min(k + 4, parts.length); j++) {
+        const key = `${f.disk_uuid}|${parts.slice(k, j).join("/")}`;
+        if (seen.has(key)) continue;
+        seen.add(key); proxyIn.set(key, (proxyIn.get(key) || 0) + (Number(f.size) || 0));
+      }
+    }
+  }
+  const inCatalog = (u) => (catalogDisks ? catalogDisks.has(u) : proxyFiles.length > 0);
   const stateBy = new Map(states.map((s) => [s.finding_key, s]));
   const findings = [];
   const add = (f) => {
@@ -156,9 +181,14 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       // Tages-Teilkopien (z. B. SSD mit nur einem Drehtag) zählen nicht als Kopie, sondern als "teilweise".
       // Je physischem Gerät: alle NAS-Ordner (nas:NXTCLOUD/…) sind EIN Gerät = höchstens eine Kopie.
       // Mehrere Ordner auf derselben Platte werden addiert (Tagesordner), auf dem NAS zählt der größte Ordnerstand.
-      const sub = new Map(), zeroDisk = new Map();
+      const sub = new Map(), zeroDisk = new Map(), proxyGb = new Map();
+      for (const r of rows) proxyGb.set(r, inCatalog(r.disk_uuid) ? gb(proxyIn.get(`${r.disk_uuid}|${r.rel_path}`) || 0) : null);
+      // Platten ohne Katalog: so viel Proxy-Material annehmen wie die größte bekannte Kopie hat
+      const knownPx = Math.max(0, ...[...proxyGb.values()].filter((x) => x != null));
       for (const r of rows) {
-        sub.set(r.disk_uuid, (sub.get(r.disk_uuid) || 0) + gb(r.size_bytes));
+        const px = proxyGb.get(r) ?? Math.min(knownPx, gb(r.size_bytes));
+        proxyGb.set(r, px);
+        sub.set(r.disk_uuid, (sub.get(r.disk_uuid) || 0) + Math.max(0, gb(r.size_bytes) - px));
         const ph = phys(r.disk_uuid);
         zeroDisk.set(ph, (zeroDisk.get(ph) || 0) + (zeroIn.get(`${r.disk_uuid}|${r.rel_path}`) || 0));
       }
@@ -169,14 +199,16 @@ export function analyze({ projects, disks, diskMeta = [], rules = [], states = [
       const ref = refCopies[t] && perDisk.has(phys(refCopies[t])) ? phys(refCopies[t]) : null;
       const refGb = ref ? perDisk.get(ref) : fullest;
       // Vollständig nur ohne leere Dateien (0 Byte = Inhalt fehlt) und mit >= 95 % des Sollstands
-      const isFull = (u) => !zeroDisk.get(u) && (refGb < SMALL_COPY_GB || perDisk.get(u) >= refGb * FULL_COPY_RATIO);
+      const isFull = (u) => !zeroDisk.get(u) && (refGb < SMALL_COPY_GB || perDisk.get(u) >= refGb * FULL_COPY_RATIO
+                                                 || refGb - perDisk.get(u) < SMALL_COPY_GB);
       const disksOf = [...perDisk.keys()].filter(isFull);
       const partialDisks = [...perDisk.keys()].filter((u) => !isFull(u));
       const copies = rows.map((r) => ({
         disk_uuid: r.disk_uuid, disk: disk.get(r.disk_uuid)?.name || "?", tier: disk.get(r.disk_uuid)?.tier || null,
         holder: disk.get(r.disk_uuid)?.holder || null, last_scan: disk.get(r.disk_uuid)?.last_scan || null,
         rel_path: r.rel_path, name: r.name, soll_name: r.soll_name || null,
-        size_gb: gb(r.size_bytes), files: r.file_count, full: isFull(phys(r.disk_uuid)), ref: r.disk_uuid === ref,
+        size_gb: gb(r.size_bytes), proxy_gb: Math.round(proxyGb.get(r) * 100) / 100,
+        files: r.file_count, full: isFull(phys(r.disk_uuid)), ref: r.disk_uuid === ref,
         zero: zeroIn.get(`${r.disk_uuid}|${r.rel_path}`) || 0,
       })).sort((a, b) => (b.full - a.full) || a.disk.localeCompare(b.disk, "de", { numeric: true }));
       const sizes = disksOf.map((u) => Math.round(perDisk.get(u) * 100) / 100);

@@ -100,6 +100,7 @@ SELECT disk_uuid, rel_path FROM z2 WHERE
   AND NOT EXISTS(SELECT 1 FROM files f WHERE f.name=z2.name AND f.size>0 AND f.disk_uuid=z2.disk_uuid AND f.rel_path NOT LIKE '%proxy%' AND substr(f.rel_path, -length(z2.suf))=z2.suf)`;
 
 let zeroCache = null;
+let proxyCache = null; // Proxy-Dateien + Platten mit Katalog, je Worker-Instanz 10 min
 
 async function loadState(env) {
   const q = (sql) => env.DB.prepare(sql).all().then((r) => r.results || []);
@@ -123,10 +124,21 @@ async function loadState(env) {
     catch { zeroMissing = null; }
     if (zeroMissing) zeroCache = { at: Date.now(), rows: zeroMissing };
   }
+  // Proxies zählen nie für "gesichert": Größe je Ordner ohne Proxies vergleichen (teure Abfrage, 10 min Cache)
+  let proxyFiles = [], catalogDisks = null;
+  if (proxyCache && Date.now() - proxyCache.at < 600000) ({ proxyFiles, catalogDisks } = proxyCache);
+  else if (env.CATALOG) {
+    try {
+      proxyFiles = (await env.CATALOG.prepare(
+        "SELECT disk_uuid, rel_path, size FROM files WHERE rel_path LIKE '%prox%' AND disk_uuid NOT LIKE 'dropbox%'").all()).results || [];
+      catalogDisks = new Set(((await env.CATALOG.prepare("SELECT disk_uuid FROM disk_sync").all()).results || []).map((r) => r.disk_uuid));
+      proxyCache = { at: Date.now(), proxyFiles, catalogDisks };
+    } catch { proxyFiles = []; catalogDisks = null; }
+  }
   // Nils' Nummern-Ordner (keine Projekte der Liste): Aussortieren = alle Kopien frei, Nur 1× = alle bis auf eine
   const legacyGb = legacy.filter((x) => x.source === "nummer").reduce((s, x) => s + (x.decision === "aussortieren" ? x.total_gb
     : x.decision === "einfach" ? Math.max(0, x.total_gb - x.size_gb) : 0), 0);
-  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles, zeroMissing });
+  const a = analyze({ projects, disks, diskMeta, rules, states, health, reserveMonths, legacyGb, zeroFiles, zeroMissing, proxyFiles, catalogDisks });
   // Vorschläge aus dem Inhalts-Abgleich: offen und noch ohne Soll-Name
   const ovKeys = new Set(overrides.map((o) => `${o.disk_uuid}|${o.rel_path}`));
   const sugg = (await q("SELECT * FROM content_suggestion WHERE status='offen'")).filter((s) => !ovKeys.has(`${s.disk_uuid}|${s.rel_path}`));

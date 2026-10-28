@@ -132,3 +132,29 @@ test("Kennzahlen: NAS-Freigaben zählen als ein Gerät", () => {
   assert.equal(a.overview.tier_stats.NAS.used_tb, 80.5);
   assert.equal(a.overview.tier_stats.NAS.cap_tb, 95.7);   // feste NAS-Kapazität, SMB liefert keine
 });
+
+test("Proxies zählen nicht: Kopie ohne gelöschte Proxies bleibt vollständig", () => {
+  const F = "2026-04-15_DÖRR ROADSHOW_FOOTAGE";
+  const a = analyze({
+    disks: [disk("A", "NXT 007"), disk("B", "NXT 037")],
+    projects: [proj("A", F, 568), proj("B", F, 518)],
+    proxyFiles: [{ disk_uuid: "A", rel_path: `${F}/FX3/Proxy/C0001_proxy.mp4`, size: 50 * GB },
+                 { disk_uuid: "A", rel_path: `${F}/FX3/C0001.MP4`, size: 0 }],
+    catalogDisks: new Set(["A", "B"]),
+  });
+  const t = a.projects[0].types[0];
+  assert.equal(t.disks, 2);
+  assert.equal(t.partial, 0);
+  assert.equal(t.copies.find((c) => c.disk_uuid === "A").proxy_gb, 50);
+});
+
+test("Platte ohne Katalog: Proxies wie bei der bekannten Kopie angenommen", () => {
+  const F = "2026-04-15_DÖRR ROADSHOW_FOOTAGE";
+  const a = analyze({
+    disks: [disk("A", "TOWER 11"), disk("B", "Connor #1")],
+    projects: [proj("A", F, 140), proj("B", F, 140)],
+    proxyFiles: [{ disk_uuid: "A", rel_path: `${F}/ProxyMedia/x.mov`, size: 137 * GB }],
+    catalogDisks: new Set(["A"]),
+  });
+  assert.equal(a.projects[0].types[0].disks, 2);
+});
