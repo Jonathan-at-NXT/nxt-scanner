@@ -108,6 +108,7 @@ class StorageScannerApp(rumps.App):
         self._analysis_busy = False
         self.fullfilment_item = rumps.MenuItem("Fullfilment Sync", callback=self.start_fullfilment_sync)
         self.d1_item = rumps.MenuItem("D1-Sync einrichten...", callback=self.change_d1_settings)
+        self.mcp_item = rumps.MenuItem("Claude verbinden (NXT Data)...", callback=self.connect_mcp)
         self._fullfilment_busy = False
 
         # Phase A: Projekte + Ingest (Live-DIT)
@@ -132,6 +133,7 @@ class StorageScannerApp(rumps.App):
         menu_items = [
             self.name_item,
             self.d1_item,
+            self.mcp_item,
             None,
             self.status_item,
             self.queue_item,
@@ -180,6 +182,23 @@ class StorageScannerApp(rumps.App):
             self.name_item.title = f"Angemeldet als: {self._user_name}"
 
     # ── D1-Sync Einstellungen ───────────────────────────────────────
+
+    def connect_mcp(self, _):
+        """NXT Data MCP in Claude Code/Desktop eintragen (idempotent)."""
+        from .mcp_connect import connect
+        if not load_config().get("d1_token"):
+            rumps.alert("Claude verbinden", "Zuerst „D1-Sync einrichten…“: das MCP nutzt denselben Zugang.")
+            return
+        r = connect()
+        if r["fehlt"]:
+            rumps.alert("Claude verbinden", "Weder Claude Code noch Claude Desktop gefunden.")
+            return
+        text = ("Verbunden mit: " + ", ".join(r["ok"])) if r["ok"] else "Nicht verbunden."
+        if r["fehler"]:
+            text += "\n\n" + "\n".join(r["fehler"])
+        if r["ok"]:
+            text += "\n\nClaude neu starten, dann stehen check_folder, check_disk und list_volumes bereit."
+        rumps.alert("Claude verbinden", text)
 
     def change_d1_settings(self, _):
         config = load_config()
@@ -1018,6 +1037,11 @@ def acquire_singleton_lock() -> bool:
 
 
 if __name__ == "__main__":
+    import sys as _sys
+    if "--mcp" in _sys.argv:            # NXT Data MCP (stdio), ohne Menüleiste
+        from storage_scanner.mcp_server import main as _mcp
+        _mcp()
+        _sys.exit(0)
     NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
     if not acquire_singleton_lock():
         import sys

@@ -41,6 +41,8 @@ a = Analysis(
         'storage_scanner.health',
         'storage_scanner.progress',
         'storage_scanner.d1_client',
+        'storage_scanner.mcp_server',
+        'storage_scanner.mcp_connect',
         'storage_scanner.ingest',
         'storage_scanner.ingest.camera_map',
         'storage_scanner.ingest.organize',

@@ -6,6 +6,7 @@ import platform
 import shutil
 import ssl
 import subprocess
+import sys
 import tempfile
 import time
 import zipfile
@@ -77,6 +78,25 @@ def check_for_update() -> dict | None:
     return None
 
 
+def running_app_path() -> Path | None:
+    """Pfad der gerade laufenden .app (nur im gebauten Bundle), sonst None."""
+    if not getattr(sys, "frozen", False):
+        return None
+    for p in Path(sys.executable).resolve().parents:
+        if p.suffix == ".app":
+            return p
+    return None
+
+
+def install_targets() -> list[Path]:
+    """Wohin das Update installiert wird: immer /Programme, zusätzlich die laufende Kopie, wenn sie woanders liegt."""
+    targets = [APP_INSTALL_PATH]
+    running = running_app_path()
+    if running and running.resolve() != APP_INSTALL_PATH.resolve() and "/Volumes/" not in str(running):
+        targets.append(running)
+    return targets
+
+
 def install_update(version: str, on_status=None) -> bool:
     """Lädt die neue Version herunter und ersetzt die installierte App.
 
@@ -134,16 +154,23 @@ def install_update(version: str, on_status=None) -> bool:
         if not new_app.exists():
             raise FileNotFoundError("NXT Scanner.app nicht im ZIP gefunden")
 
-        # Alte App ersetzen
+        # Alte App ersetzen: /Programme und – falls die App von woanders läuft (Downloads, Schreibtisch,
+        # ~/Programme) – auch diese Kopie, sonst startet dort weiter die alte Version
         _status("Installieren...")
-        if APP_INSTALL_PATH.exists():
-            shutil.rmtree(APP_INSTALL_PATH)
-        shutil.copytree(new_app, APP_INSTALL_PATH, symlinks=True)
-
-        # Quarantine entfernen + Execute-Berechtigung sicherstellen
-        subprocess.run(["xattr", "-cr", str(APP_INSTALL_PATH)], capture_output=True)
-        main_exe = APP_INSTALL_PATH / "Contents" / "MacOS" / "NXT Scanner"
-        if main_exe.exists():
-            main_exe.chmod(0o755)
+        for target in install_targets():
+            try:
+                if target.exists():
+                    shutil.rmtree(target)
+                shutil.copytree(new_app, target, symlinks=True)
+            except OSError as e:
+                if target == APP_INSTALL_PATH:
+                    raise
+                logger.info(f"Laufende Kopie {target} nicht ersetzt: {e}")
+                continue
+            # Quarantine entfernen + Execute-Berechtigung sicherstellen
+            subprocess.run(["xattr", "-cr", str(target)], capture_output=True)
+            main_exe = target / "Contents" / "MacOS" / "NXT Scanner"
+            if main_exe.exists():
+                main_exe.chmod(0o755)
 
     return True
