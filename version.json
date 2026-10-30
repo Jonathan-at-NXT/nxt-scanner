@@ -1,5 +1,5 @@
 {
-  "version": "2.1.0",
+  "version": "2.1.1",
   "download_url": "https://github.com/Jonathan-at-NXT/nxt-scanner/releases/latest",
-  "release_notes": "Neu: „Claude verbinden (NXT Data)…“ im Menü. Damit kann Claude (Claude Code oder Claude Desktop) vor dem Löschen prüfen, ob ein Ordner noch mindestens 2× woanders vollständig gesichert ist (NAS zählt als 1 Gerät, im Zweifel „nicht löschen“). Fix: Das Auto-Update ersetzt jetzt auch eine App, die nicht aus dem Programme-Ordner gestartet wird."
+  "release_notes": "Fix: 2.1.0 war versehentlich ein interner Admin-Build (Anzeige „Admin-Build“, keine automatischen Updates). 2.1.1 ist wieder der normale Team-Build. Neu: „Claude verbinden (NXT Data)…“ im Menü. Damit kann Claude (Claude Code oder Claude Desktop) vor dem Löschen prüfen, ob ein Ordner noch mindestens 2× woanders vollständig gesichert ist (NAS zählt als 1 Gerät, im Zweifel „nicht löschen“). Fix: Das Auto-Update ersetzt jetzt auch eine App, die nicht aus dem Programme-Ordner gestartet wird."
 }

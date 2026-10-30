@@ -60,6 +60,9 @@ if [ -z "$ARCH" ]; then
     ARCH=$(uname -m)
 fi
 
+# Admin-Teile nur im Admin-Build (die Spec baut sonst immer den Team-Build)
+if $ADMIN; then export NXT_ADMIN=1; else unset NXT_ADMIN; fi
+
 # Version aus Python-Package lesen
 VERSION=$($PYTHON -c "import sys; sys.path.insert(0,'.'); from storage_scanner import __version__; print(__version__)")
 

@@ -8,9 +8,10 @@ spec_dir = os.path.dirname(os.path.abspath(SPEC))
 sys.path.insert(0, spec_dir)
 from storage_scanner import __version__
 
-# Team-Build (NXT_TEAM=1): ohne Admin-Teile (Karten-Ingest, Kopieren, Notion-Auswertung).
-# Admin-Build für Sicherungs-/Haupt-/Intel-Mac wird nur lokal verteilt, nie veröffentlicht.
-TEAM = os.environ.get("NXT_TEAM") == "1"
+# Standard ist der Team-Build: ohne Admin-Teile (Karten-Ingest, Kopieren, Notion-Auswertung).
+# Admin-Build nur mit NXT_ADMIN=1 (release.sh --admin) – für Sicherungs-/Haupt-/Intel-Mac, nur lokal verteilt,
+# nie veröffentlicht. (Früher umgekehrt per NXT_TEAM=1: dadurch ging v2.1.0 versehentlich als Admin-Build raus.)
+TEAM = os.environ.get("NXT_ADMIN") != "1"
 ADMIN_ONLY = ['storage_scanner.ingest', 'storage_scanner.transfer', 'storage_scanner.admin']
 
 a = Analysis(
