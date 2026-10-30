@@ -17,6 +17,7 @@
 import { runNotionSync } from "./notion_sync.js";
 import { deriveIfChanged } from "./derive.js";
 import { handleBriefkasten } from "./briefkasten.js";
+import { handleRedundancy } from "./redundancy.js";
 import { handleSlack } from "./slack.js";
 
 const json = (obj, status = 200) =>
@@ -276,8 +277,22 @@ export default {
       }
     }
 
+    // Read-only Redundanz-Abfrage fürs NXT Data MCP: darf ein Ordner weg (≥2 andere Geräte vollständig)?
+    if (url.pathname === "/query/redundancy" && request.method === "POST") {
+      if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+      try { return await handleRedundancy(request, env, json); }
+      catch (e) { return json({ error: "db", detail: String(e) }, 500); }
+    }
+
     if (url.pathname === "/health") {
       return json({ ok: true });
+    }
+
+    // Datenträger-Anfrage vom Sicherungs-Mac (meta disk_request) – der Haupt-Mac zeigt daraus ein Pop-up
+    if (url.pathname === "/ingest/disk-request" && request.method === "GET") {
+      if (!authorized(request, env)) return json({ error: "unauthorized" }, 401);
+      const r = await env.DB.prepare("SELECT value FROM meta WHERE key='disk_request'").first();
+      return json(r ? JSON.parse(r.value) : { id: null });
     }
 
     // ── Alte Seiten abgeschaltet (Jonathan 25.10.): Ansicht nur noch im Dashboard nxt-storage ──

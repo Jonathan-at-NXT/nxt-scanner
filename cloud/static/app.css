@@ -228,3 +228,20 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); }
 .question { border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: 10px; background: var(--panel); padding: 12px 14px; }
 .question .q-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .question .q-text { margin-top: 6px; font-size: 15px; color: var(--text); }
+
+/* Roadmap-Zeitachse: fester Maßstab, horizontal scrollbar */
+.rm-wrap { overflow-x: auto; overflow-y: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); margin-top: 10px; }
+.rm { position: relative; }
+.rm-m { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line-strong); }
+.rm-m span { position: absolute; top: 6px; left: 5px; font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.rm-w { position: absolute; top: 26px; bottom: 0; border-left: 1px dashed var(--line); }
+.rm-today { position: absolute; top: 0; bottom: 0; border-left: 2px solid var(--crit); z-index: 2; }
+.rm-bar { position: absolute; height: 18px; margin-top: 3px; border-radius: 4px; }
+.rm-bar.done { background: var(--ok); }
+.rm-bar.open { border: 1px dashed var(--line-strong); background: #ffffff0d; }
+.rm-bar.open.laeuft { border-color: var(--warn); background: #f5a5241f; }
+.rm-prog { position: absolute; width: 0; height: 24px; border-left: 2px dotted var(--warn); }
+.rm-goal { position: absolute; width: 16px; height: 16px; transform: rotate(45deg); background: var(--text); border-radius: 2px;
+  cursor: ew-resize; touch-action: none; z-index: 3; box-shadow: 0 0 0 3px var(--panel-2); }
+.rm-goal:hover, .rm-goal.drag { background: var(--info); }
+.rm-lbl { position: absolute; height: 24px; line-height: 24px; font-size: 12px; white-space: nowrap; color: var(--text-2); pointer-events: none; }

@@ -19,6 +19,61 @@
     if (diff === 1) return `gestern ${hm}`;
     return `${t.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" })}, ${hm}`;
   };
+  // Roadmap-Zeitachse: fester Maßstab (Pixel je Tag), Monats-/Wochenraster, offene Ziele verschiebbar
+  const RM_PX = { Monat: 2.2, Woche: 7 };
+  const rmScale = () => (RM_PX[store.get("nxt-rm-scale", "Monat")] ? store.get("nxt-rm-scale", "Monat") : "Monat");
+  const rmDay = (iso) => Math.round(new Date(iso + "T12:00:00Z").getTime() / 86400000);
+  const rmIso = (d) => new Date(d * 86400000).toISOString().slice(0, 10);
+  const rmTimeline = (phasen, prognose) => {
+    const px = RM_PX[rmScale()], today = rmDay(new Date().toISOString().slice(0, 10));
+    const t0 = rmDay("2025-09-01");
+    const last = Math.max(today, ...phasen.map((p) => rmDay(p.ziel || p.bis || p.von)));
+    const t1 = rmDay(rmIso(last + 120).slice(0, 7) + "-01");
+    const W = Math.round((t1 - t0) * px), x = (d) => Math.round((d - t0) * px), ROW = 30, TOP = 34;
+    const months = [];
+    for (let y = 2025, m = 8; ; m++) { if (m === 12) { m = 0; y++; } const d = Date.UTC(y, m, 1) / 86400000; if (d >= t1) break; months.push([d, y, m]); }
+    const weeks = []; for (let d = t0 + ((4 - ((t0 % 7) + 7) % 7) + 7) % 7; d < t1; d += 7) weeks.push(d);   // Montage
+    const H = TOP + phasen.length * ROW + 8;
+    const grid = `${rmScale() === "Woche" ? weeks.map((d) => `<div class="rm-w" style="left:${x(d)}px"></div>`).join("") : ""}
+      ${months.map(([d, y, m]) => `<div class="rm-m" style="left:${x(d)}px"><span>${m === 0 || d === months[0][0] ? `${["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"][m]} ${String(y).slice(2)}` : ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"][m]}</span></div>`).join("")}
+      <div class="rm-today" style="left:${x(today)}px" title="heute"></div>`;
+    const rows = phasen.map((p, i) => {
+      const top = TOP + i * ROW, a = rmDay(p.von);
+      if (p.status === "erledigt") {
+        const b = rmDay(p.bis);
+        return `<div class="rm-bar done" style="top:${top}px;left:${x(a)}px;width:${Math.max(6, x(b + 1) - x(a))}px" title="${esc(p.titel)}"></div>
+          <div class="rm-lbl" style="top:${top}px;left:${x(b + 1) + 6}px">${esc(p.titel)}</div>`;
+      }
+      const z = rmDay(p.ziel), progn = p.id === "vervollst" && prognose ? rmDay(prognose) : null;
+      return `<div class="rm-bar open ${p.status}" data-rmbar="${esc(p.id)}" style="top:${top}px;left:${x(a)}px;width:${Math.max(6, x(z) - x(a))}px"></div>
+        ${progn ? `<div class="rm-prog" style="top:${top}px;left:${x(progn)}px" title="Prognose aus dem Zeitplan: ${progn ? rmIso(progn) : ""}"></div>` : ""}
+        <div class="rm-goal" data-rmziel="${esc(p.id)}" data-von="${a}" style="top:${top + 3}px;left:${x(z) - 8}px" title="ziehen zum Verschieben"></div>
+        <div class="rm-lbl" data-rmlbl="${esc(p.id)}" style="top:${top}px;left:${x(z) + 12}px">${esc(p.titel)} · <span class="sub">${new Date(p.ziel + "T12:00:00").toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" })}</span></div>`;
+    }).join("");
+    return `<div class="rm-wrap" id="rm-wrap" data-px="${px}" data-t0="${t0}" data-today="${x(today)}"><div class="rm" style="width:${W}px;height:${H}px">${grid}${rows}</div></div>`;
+  };
+  // Zurückgeholte Projekte (nie auftrennen) mit Fundorten + Zeitplan, aus vervollst_status.py über nas_loesch_meta
+  const VST = { parkbereit: ["ok", "Parkbereit"], pruefen: ["warnung", "Prüfsummen fehlen"], kopieren: ["kritisch", "Kopieren nötig"], geparkt: ["ok", "Geparkt"] };
+  const vervollst = (v, s) => {
+    if (!v || !v.projekte) return "";
+    const offen = v.projekte.filter((p) => p.status !== "geparkt");
+    const list = offen.filter((p) => !s || p.projekt.toLowerCase().includes(s) || Object.keys(p.liegt_auf).some((d) => d.toLowerCase().includes(s)));
+    const gb = offen.reduce((a, p) => a + p.gb, 0);
+    const day = (iso) => new Date(iso).toLocaleString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    return `<div class="panel section"><h3>Zeitplan bis alles im Parkordner ist</h3>
+      <p class="hint">Je Platte: fehlende Dateien vom NAS kopieren, dann das Projekt auf der Platte prüfen (Prüfsumme). Ist ein Projekt auf beiden Sicherungen geprüft, kommt es automatisch ganz in den Parkordner.
+        Grob gerechnet mit 100 MB/s Kopie und 150 MB/s Prüfung, zwei Platten parallel, ohne Wartezeit beim Umstecken. Stand ${esc(rel(v.stand))}.</p>
+      ${v.zeitplan.length ? `<table class="table"><thead><tr><th>Platte</th><th class="r">Kopieren</th><th class="r">Prüfen</th><th class="r">Projekte</th><th class="r">Dauer</th><th>Fertig etwa</th></tr></thead><tbody>
+        ${v.zeitplan.map((z) => `<tr><td><b>${esc(z.platte)}</b>${z.bei && !["DATEN MACBOOK", "Jonathan Oehler", "Server"].includes(z.bei) ? `<div class="sub">liegt bei ${esc(z.bei)}</div>` : ""}</td><td class="num r">${fmtGb(z.kopie_gb)}</td><td class="num r">${fmtGb(z.pruef_gb)}</td><td class="num r">${fmtN(z.projekte)}</td>
+          <td class="num r">${String(z.stunden).replace(".", ",")} h</td><td class="sub">${esc(day(z.bis))}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">Nichts mehr zu tun.</div>`}</div>
+    <div class="panel section"><h3>Wartet auf Vervollständigung · ${fmtN(offen.length)} Projekte · ${fmtGb(gb)}</h3>
+      <p class="hint">Diese Projekte liegen wieder ganz auf dem NAS, weil sie nur teilweise doppelt gesichert waren (Projekte werden nie aufgetrennt). Sicherungen = die zwei Platten, die vervollständigt werden. Liegt auf = wo das Projekt gerade überall liegt (Name und Größe).</p>
+      ${list.length ? `<table class="table"><thead><tr><th>Projekt</th><th class="r">Größe</th><th>Status</th><th>Sicherungen</th><th>Liegt auf</th></tr></thead><tbody>
+        ${list.map((p) => `<tr><td><b>${esc(p.projekt)}</b><div class="sub">${fmtN(p.dateien)} Dateien · ${fmtGb(p.sicher_gb)} schon geprüft doppelt</div></td><td class="num r">${fmtGb(p.gb)}</td>
+          <td><span class="row" style="gap:6px"><span class="dot ${VST[p.status][0]}"></span>${VST[p.status][1]}</span></td>
+          <td>${p.sicherungen.map((x) => `<div><b>${esc(x.platte)}</b> <span class="sub">${x.fehlt_gb >= 1 ? `fehlt ${fmtGb(x.fehlt_gb)}` : "komplett"}</span></div>`).join("") || '<span class="sub">keine</span>'}</td>
+          <td class="sub">${Object.entries(p.liegt_auf).map(([d, g]) => `${esc(d)} ${fmtGb(g)}`).join(" · ")}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">Kein Projekt passt zur Suche.</div>`}</div>`;
+  };
   const TYPE_LABEL = { MISSING_BACKUP: "Nur 1× gesichert", TIER_MISSING: "Pflicht-Stufe fehlt", SIZE_MISMATCH: "Größe weicht ab",
     INCOMPLETE_BACKUP: "Kopie unvollständig", ZERO_FILES: "Leere Dateien (0 Byte)", EXCESS_COPIES: "Zu viele Kopien", PARTIAL_COPY: "Teilkopie überflüssig", REF_EXTRA: "Mehr als Sollstand", UMBENENNEN: "Umbenennen", DUPLICATE_DISK_NAME: "Name doppelt",
     DISK_DEFECT: "Platte defekt", DISK_WARN: "Platte auffällig" };
@@ -294,7 +349,7 @@
         free: (d) => d.free_gb, projects: (d) => d.projects, bad: (d) => d.bad_projects, only: (d) => d.only_here_gb, scan: (d) => d.last_scan });
       const tiers = ["alle", ...S.meta.tiers, "ohne", ...(S.disks.some((d) => d.retired) ? ["entfernt"] : [])];
       return `
-      <div class="head"><div><h1>Datenträger</h1><p>Wer welche Platte hat, wie voll sie ist und was darauf liegt. Klick zum Bearbeiten von Stufe, Halter und Standort.</p></div></div>
+      <div class="head"><div><h1>Datenträger</h1><p>Wer welche Platte hat, wie voll sie ist und was darauf liegt. Klick zum Bearbeiten von Stufe, Halter und Standort. <a href="#/plattencheck">Platten-Check: alte Doppel und fehlende Platten aussortieren →</a></p></div></div>
       <div class="toolbar">${tiers.map((t) => `<button class="chip ${ui.disk.tier === t ? "on" : ""}" data-tier="${t}">${t === "alle" ? "Alle" : t === "ohne" ? "Ohne Stufe" : t === "entfernt" ? "Entfernt" : t}</button>`).join("")}</div>
       <table class="table"><thead><tr>${th("disk", "name", "Name")}${th("disk", "health", "Zustand")}${th("disk", "tier", "Stufe")}${th("disk", "holder", "Bei")}${th("disk", "fill", "Füllgrad")}${th("disk", "free", "Frei", "r")}${th("disk", "bad", "Probleme", "r")}${th("disk", "only", "Nur hier", "r hide-m")}${th("disk", "scan", "Letzter Scan", "hide-m")}</tr></thead><tbody>
       ${sorted.map((d) => {
@@ -483,6 +538,70 @@
           <td class="num r">${fmtGb(f.size / 1e9)}</td><td><span class="row" style="gap:6px"><span class="dot ${(ST[f.state] || ["", f.state])[0]}"></span>${esc((ST[f.state] || ["", f.state])[1])}</span>
           <div class="sub">${f.pulled_at ? rel(f.pulled_at) : f.uploaded_at ? rel(f.uploaded_at) : rel(f.created_at)}</div></td></tr>`).join("")}</tbody></table>` : '<div class="empty">Noch nichts hochgeladen.</div>'}</div>`;
     },
+    async plattencheck() {
+      // Alle Einträge je Name: neu gescannt (seit Datei-Katalog-Start), fehlt noch, alte Doppel desselben Namens
+      const { catalog } = await (await fetch("/api/plattencheck")).json();
+      const cat = new Map(catalog.map((c) => [c.disk_uuid, c]));
+      const SEIT = "2026-10-22";
+      const s = q().toLowerCase();
+      const alle = S.disks.filter((d) => !d.uuid.startsWith("nas:") && !d.retired);
+      const byName = new Map();
+      for (const d of alle) { if (!byName.has(d.name)) byName.set(d.name, []); byName.get(d.name).push(d); }
+      const neu = [], fehlt = [], doppel = [];
+      for (const [, list] of byName) {
+        list.sort((a, b) => ((b.fallback ? 0 : 1) - (a.fallback ? 0 : 1)) || String(b.last_scan || "").localeCompare(String(a.last_scan || "")));
+        const top = list[0], isNeu = !top.fallback && (top.last_scan || "") >= SEIT;
+        (isNeu ? neu : fehlt).push(top);
+        if (isNeu) doppel.push(...list.slice(1).map((d) => ({ ...d, neuer: top })));
+      }
+      const match = (d) => !s || [d.name, d.last_user, d.holder].some((x) => String(x || "").toLowerCase().includes(s));
+      const day = (iso) => (iso ? new Date(iso).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" }) : "nie");
+      const katalog = (d) => (cat.has(d.uuid) ? `<span class="sub">Katalog ${fmtN(cat.get(d.uuid).files)} Dateien</span>` : `<span class="sub" style="color:var(--warn)">kein Katalog</span>`);
+      const btn = (d, why) => `<button class="btn small ghost" data-pc-retire="${esc(d.uuid)}" data-pc-why="${esc(why)}" data-pc-name="${esc(d.name)}">Entfernen</button>`;
+      const row = (d, extra, why) => `<tr><td><b>${esc(d.name)}</b><div class="sub mono">${esc(d.fallback ? "ohne Volume-Kennung (name:)" : d.uuid)}</div></td>
+        <td>${esc(d.holder || d.last_user || "–")}</td><td class="sub">${day(d.last_scan)}</td><td class="num r">${d.used_gb != null ? fmtGb(d.used_gb) : "–"}</td>
+        <td>${extra}</td><td class="r">${why ? btn(d, why) : ""}</td></tr>`;
+      const head = `<thead><tr><th>Platte</th><th>Bei</th><th>Letzter Scan</th><th class="r">Belegt</th><th></th><th></th></tr></thead>`;
+      const dl = doppel.filter(match), fl = fehlt.filter(match), nl = neu.filter(match).sort((a, b) => a.name.localeCompare(b.name, "de", { numeric: true }));
+      return `<div class="head"><div><p><a href="#/datentraeger">← Datenträger</a></p><h1>Platten-Check</h1><p>Alle Einträge auf einen Blick. „Neu“ = seit ${day(SEIT)} gescannt. Entfernen ist protokolliert, lässt sich unter Datenträger → entfernt rückgängig machen, und eine Platte, die wieder gescannt wird, ist automatisch wieder da. Auf der Platte selbst wird nichts gelöscht.</p></div></div>
+      <div class="grid kpis">
+        <div class="panel kpi"><div class="label">Neu gescannt</div><div class="value num" style="color:var(--ok)">${fmtN(neu.length)}</div></div>
+        <div class="panel kpi"><div class="label">Fehlt noch</div><div class="value num" style="color:${fehlt.length ? "var(--warn)" : "var(--ok)"}">${fmtN(fehlt.length)}</div></div>
+        <div class="panel kpi"><div class="label">Alte Doppel</div><div class="value num" style="color:${doppel.length ? "var(--crit)" : "var(--ok)"}">${fmtN(doppel.length)}</div><div class="sub">Name schon neu gescannt</div></div>
+      </div>
+      <div class="panel section"><div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><h3 style="margin:0">Alte Doppel · ${fmtN(dl.length)}</h3>
+        ${dl.length ? `<button class="btn small" data-pc-all="1">Alle ${fmtN(dl.length)} entfernen</button>` : ""}</div>
+        <p class="hint">Ältere Einträge mit demselben Namen wie eine neu gescannte Platte (andere Kennung, z. B. nach Formatieren oder alter Scan ohne Kennung).</p>
+        ${dl.length ? `<table class="table">${head}<tbody>${dl.map((d) => row(d, `<span class="sub">neuer Eintrag ${day(d.neuer.last_scan)}</span>`, `Alter Eintrag, ${d.name} neu gescannt am ${day(d.neuer.last_scan)}`)).join("")}</tbody></table>` : `<div class="empty">Keine alten Doppel.</div>`}</div>
+      <div class="panel section"><h3>Fehlt noch · ${fmtN(fl.length)}</h3><p class="hint">Seit ${day(SEIT)} nicht gescannt. Gibt es eine davon nicht mehr: Entfernen.</p>
+        ${fl.length ? `<table class="table">${head}<tbody>${fl.sort((a, b) => String(a.last_user || "").localeCompare(String(b.last_user || "")) || a.name.localeCompare(b.name, "de", { numeric: true })).map((d) => row(d, katalog(d), "Gibt es nicht mehr (Platten-Check)")).join("")}</tbody></table>` : `<div class="empty">Alle Platten neu gescannt.</div>`}</div>
+      <div class="panel section"><h3>Neu gescannt · ${fmtN(nl.length)}</h3>
+        <table class="table">${head}<tbody>${nl.map((d) => row(d, katalog(d), "")).join("")}</tbody></table></div>`;
+    },
+    async roadmap() {
+      const { roadmap: r, vervollst: v, ziele } = await (await fetch("/api/roadmap")).json();
+      if (!r) return `<div class="empty">Noch keine Roadmap geladen.</div>`;
+      const ST = { erledigt: ["ok", "Geschafft"], laeuft: ["warnung", "Läuft"], geplant: ["info", "Geplant"], ziel: ["", "Ziel"] };
+      const prognose = v && v.zeitplan && v.zeitplan.length ? v.zeitplan[v.zeitplan.length - 1].bis.slice(0, 10) : null;
+      const offen = v ? v.projekte.filter((p) => p.status !== "geparkt") : [];
+      const phasen = r.phasen.map((p) => ({ ...p, ziel: p.status === "erledigt" ? null : (ziele || {})[p.id] || p.ziel }));
+      const done = phasen.filter((p) => p.status === "erledigt").length;
+      const dd = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+      return `<div class="head"><div><h1>Roadmap</h1><p>Von der Tabelle von Hand bis zum Speicher-Agent, der sich selbst verwaltet. ${fmtN(done)} von ${fmtN(phasen.length)} Etappen geschafft.</p></div></div>
+      <div class="panel section"><h3>Langfristiges Ziel: ${esc(r.ziel.titel)}</h3><p>${esc(r.ziel.text)}</p>
+        <p class="sub">${r.ziel.kennzahlen.map(esc).join(" · ")}</p></div>
+      <div class="panel section"><div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><h3 style="margin:0">Zeitachse</h3>
+        <div class="row" style="gap:6px">${["Monat", "Woche"].map((m) => `<button class="chip${rmScale() === m ? " on" : ""}" data-rmscale="${m}">${m}</button>`).join("")}</div></div>
+        <p class="hint">Fester Maßstab: jeder Tag ist gleich breit. Geschafftes liegt fest, offene Ziele (Raute) lassen sich am Ende entlang der Zeit ziehen; das Datum wird für alle gespeichert und protokolliert. Rote Linie = heute.</p>
+        ${rmTimeline(phasen, prognose)}</div>
+      <div class="panel section"><table class="table"><thead><tr><th>Wann</th><th>Etappe</th><th>Status</th></tr></thead><tbody>
+        ${phasen.map((p) => `<tr><td class="sub" style="white-space:nowrap">${p.status === "erledigt" ? (p.von === p.bis ? dd(p.von) : `${dd(p.von)} – ${dd(p.bis)}`) : `Ziel ${dd(p.ziel)}`}</td><td><b>${esc(p.titel)}</b>
+          <ul class="hint" style="margin:4px 0 0 18px">${p.punkte.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+          ${p.zeitplan && v ? `<p class="hint">Noch ${fmtN(offen.length)} Projekte, ${fmtGb(offen.reduce((a, x) => a + x.gb, 0))}. Rechnerisch fertig ${prognose ? dd(prognose) : "–"}, wenn jede Platte etwa eine Stunde nach dem Pop-up dran ist. <a href="#/loeschliste">Zeitplan je Platte →</a></p>` : ""}</td>
+          <td><span class="row" style="gap:6px"><span class="dot ${ST[p.status][0]}"></span>${ST[p.status][1]}</span></td></tr>`).join("")}</tbody></table></div>
+      <div class="panel section"><h3>Ideen auf dem Weg dahin</h3><table class="table"><tbody>
+        ${r.ideen.map((i) => `<tr><td style="width:30%"><b>${esc(i.titel)}</b></td><td class="sub">${esc(i.text)}</td></tr>`).join("")}</tbody></table></div>`;
+    },
     async loeschliste(params) {
       const id = params.get("p");
       const s = q().toLowerCase();
@@ -508,6 +627,7 @@
         <div class="panel kpi"><div class="label">Größe abweichend</div><div class="value num" style="color:${meta.groesse_anders ? "var(--crit)" : "var(--ok)"}">${fmtN(meta.groesse_anders)}</div></div>
         <div class="panel kpi"><div class="label">Schon weg</div><div class="value num">${fmtN(meta.nicht_mehr_da)}</div><div class="sub">nicht mehr im Parkordner</div></div>
       </div>
+      ${vervollst(meta.vervollst, s)}
       <div class="panel section"><h3>So prüfst du selbst</h3><ol class="hint">
         <li>Jede Zeile ist ein Projektordner im Parkordner, daneben die Geräte, auf denen die Dateien noch liegen, und wie viele.</li>
         <li>Ein Klick aufs Projekt zeigt jede Datei mit ihren Gegenkopien.</li>
@@ -703,6 +823,43 @@
     chat.loadingOld = false;
     if (chat.more && log.scrollHeight <= log.clientHeight) loadOlderChat();   // noch kein Scrollbalken: weiter füllen
   }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-rmscale]");
+    if (b) { store.set("nxt-rm-scale", b.dataset.rmscale); render(); }
+  });
+  document.addEventListener("pointerdown", (e) => {
+    const g = e.target.closest("[data-rmziel]"); if (!g) return;
+    e.preventDefault();
+    const wrap = document.getElementById("rm-wrap"), px = Number(wrap.dataset.px), t0 = Number(wrap.dataset.t0), von = Number(g.dataset.von);
+    const id = g.dataset.rmziel, bar = wrap.querySelector(`[data-rmbar="${id}"]`), lbl = wrap.querySelector(`[data-rmlbl="${id}"]`);
+    const startX = e.clientX, start = Math.round((parseFloat(g.style.left) + 8) / px) + t0;
+    let day = start;
+    g.setPointerCapture(e.pointerId); g.classList.add("drag");
+    const move = (ev) => {
+      day = Math.max(von + 1, start + Math.round((ev.clientX - startX) / px));
+      const xx = Math.round((day - t0) * px);
+      g.style.left = xx - 8 + "px"; bar.style.width = Math.max(6, xx - parseFloat(bar.style.left)) + "px"; lbl.style.left = xx + 12 + "px";
+      lbl.querySelector(".sub").textContent = new Date(day * 86400000).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" });
+    };
+    const up = async () => {
+      g.removeEventListener("pointermove", move); g.removeEventListener("pointerup", up); g.removeEventListener("pointercancel", up); g.classList.remove("drag");
+      if (day === start) return;
+      try { await post("/api/roadmap/ziel", { id, datum: new Date(day * 86400000).toISOString().slice(0, 10) }); toast("Ziel verschoben"); }
+      catch (err) { toast(err.message, true); }
+      render();
+    };
+    g.addEventListener("pointermove", move); g.addEventListener("pointerup", up); g.addEventListener("pointercancel", up);
+  });
+  document.addEventListener("click", async (e) => {
+    const one = e.target.closest("[data-pc-retire]"), all = e.target.closest("[data-pc-all]");
+    if (!one && !all) return;
+    const btns = all ? [...document.querySelectorAll("[data-pc-retire]")].filter((b) => b.dataset.pcWhy.startsWith("Alter Eintrag")) : [one];
+    if (!window.confirm(all ? `${btns.length} alte Doppel-Einträge entfernen?` : `„${one.dataset.pcName}“ entfernen? (${one.dataset.pcWhy})`)) return;
+    try {
+      for (const b of btns) await post("/api/disk", { disk_uuid: b.dataset.pcRetire, retire: true, retire_reason: b.dataset.pcWhy });
+      toast(`${btns.length} entfernt`); await load(); render();
+    } catch (err) { toast(err.message, true); }
+  });
   document.addEventListener("scroll", (e) => { if (e.target.id === "chat-log" && e.target.scrollTop < 60) loadOlderChat(); }, true);
   async function sendChat() {
     const ta = $("#chat-text"); const text = (ta?.value || "").trim();
@@ -875,7 +1032,10 @@
     document.querySelectorAll(".pages a").forEach((a) => a.classList.toggle("active", a.dataset.page === current));
     const params = new URLSearchParams(qs || "");
     const html = await pages[current](params);
+    const rmLeft = document.getElementById("rm-wrap")?.scrollLeft;   // Zeitachse: Scroll-Position beim Neuzeichnen halten
     $("#view").innerHTML = html;
+    const rw = document.getElementById("rm-wrap");
+    if (rw) rw.scrollLeft = rmLeft ?? Math.max(0, Number(rw.dataset.today) - rw.clientWidth * 0.6);
     if (params.get("p")) projectDrawer(params.get("p"));
     if (params.get("d")) diskDrawer(params.get("d"));
   }

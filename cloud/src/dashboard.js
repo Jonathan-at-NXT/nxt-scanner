@@ -407,6 +407,21 @@ async function handleWrite(path, body, env, user) {
     await audit(env, who, "regel_sammel", `${keys.length} Projekte`, { sicherung: body.sicherung, rule_keys: keys.slice(0, 50) });
     return { ok: true, count: keys.length };
   }
+  if (path === "/api/roadmap/ziel") {       // offenes Roadmap-Ziel auf der Zeitachse verschoben
+    const id = clean(body.id, 40), datum = String(body.datum || "");
+    if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(datum)) throw new Error("Ziel: id und Datum (JJJJ-MM-TT) nötig");
+    const rm = await env.DB.prepare("SELECT value FROM meta WHERE key='roadmap'").first();
+    const phase = rm && JSON.parse(rm.value).phasen.find((p) => p.id === id);
+    if (!phase || phase.status === "erledigt") throw new Error("Nur offene Ziele lassen sich verschieben");
+    const cur = await env.DB.prepare("SELECT value FROM meta WHERE key='roadmap_ziele'").first();
+    const ziele = cur ? JSON.parse(cur.value) : {};
+    const vorher = ziele[id] || phase.ziel;
+    ziele[id] = datum;
+    await env.DB.prepare("INSERT INTO meta(key,value) VALUES('roadmap_ziele',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .bind(JSON.stringify(ziele)).run();
+    await audit(env, who, "roadmap_ziel", phase.titel, { ziel: [vorher, datum] });
+    return { ok: true, ziele };
+  }
   if (path === "/api/cleanup/reserve") {    // Reserve-Monate ändern -> Ziel neu setzen
     const m = Number(body.months);
     if (![0, 1, 3, 6].includes(m)) throw new Error("Reserve: 0, 1, 3 oder 6 Monate");
@@ -613,6 +628,18 @@ export default {
         const meta = Object.fromEntries(((await env.DB.prepare("SELECT k, v FROM nas_loesch_meta").all()).results || []).map((r) => [r.k, JSON.parse(r.v)]));
         const projs = (await env.DB.prepare("SELECT * FROM nas_loesch_proj ORDER BY gb DESC").all()).results || [];
         return json({ meta, projs: projs.map((x) => ({ ...x, geraete: JSON.parse(x.geraete || "[]") })) });
+      }
+      if (url.pathname === "/api/plattencheck") {
+        // Welche Datenträger haben einen Datei-Katalog (EU) und wann zuletzt hochgeladen
+        const rows = env.CATALOG ? ((await env.CATALOG.prepare("SELECT disk_uuid, files, synced_at FROM disk_sync").all()).results || []) : [];
+        return json({ catalog: rows });
+      }
+      if (url.pathname === "/api/roadmap") {
+        // Roadmap (meta 'roadmap', vom Sicherungs-Mac) + Zeitplan der zurückgeholten Projekte (nas_loesch_meta 'vervollst')
+        const r = await env.DB.prepare("SELECT value FROM meta WHERE key='roadmap'").first();
+        const v = await env.DB.prepare("SELECT v FROM nas_loesch_meta WHERE k='vervollst'").first();
+        const z = await env.DB.prepare("SELECT value FROM meta WHERE key='roadmap_ziele'").first();
+        return json({ roadmap: r ? JSON.parse(r.value) : null, vervollst: v ? JSON.parse(v.v) : null, ziele: z ? JSON.parse(z.value) : {} });
       }
       if (url.pathname === "/api/audit") {
         const rows = (await env.DB.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 300").all()).results || [];

@@ -17,6 +17,11 @@ SPEICHERUNGEN_DB_ID = "31b8ae70-295b-814e-88ed-f7caaabfaab6"
 SLACK_CHANNEL = "C0C6LSYFL1Z"   # einziger Kanal, in dem der NXT Data Agent liest und antwortet
 
 # Notion-Spiegel aus D1 (ersetzt den Notion-Sync im Scanner)
+[[rules]]
+type = "Data"
+globs = ["**/*.woff2"]
+fallthrough = true
+
 [triggers]
 crons = ["*/15 * * * *"]
 
